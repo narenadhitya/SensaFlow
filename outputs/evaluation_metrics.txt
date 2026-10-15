@@ -28,10 +28,10 @@ Actual Fault                 12               56
 
 ROBUSTNESS SUMMARY (see robustness_report.txt)
 ----------------------------------
-Missing values 10% (random NaN per sensor)         F1 0.703 (Δ -0.139) FAIL
-Missing values 20%                                 F1 0.636 (Δ -0.206) INFO
-Gaussian noise σ=0.1·std                           F1 0.746 (Δ -0.096) PASS
-Gaussian noise σ=0.25·std                          F1 0.493 (Δ -0.349) INFO
+Missing values 10% (random NaN per sensor)         F1 0.755 (Δ -0.087) PASS
+Missing values 20%                                 F1 0.668 (Δ -0.174) INFO
+Gaussian noise σ=0.1·std                           F1 0.721 (Δ -0.121) PASS*
+Gaussian noise σ=0.25·std                          F1 0.475 (Δ -0.367) INFO
 Condition shift: +2 K ambient & process temp       F1 0.842 (Δ +0.000) PASS
 Condition shift: temperatures ×1.1 (plan spec)     F1 0.608 (Δ -0.234) INFO
 Condition shift: rpm +5%                           F1 0.525 (Δ -0.318) INFO

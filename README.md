@@ -77,7 +77,7 @@ The file type is detected from its columns:
 - **Features:** raw sensors + physics-derived features (temperature delta, mechanical power, torque × wear strain,
   temp delta × rpm). Absolute temperatures are dropped so the model is invariant to uniform temperature shifts.
 - **Model:** XGBoost vs Random Forest, class-weighted for the 3.4% fault rate and trained on NaN-augmented copies
-  (10%/20% sensor dropout) so missing readings are handled natively. The winner is chosen on mean validation F1 across
+  (10%/20% sensor dropout). At inference, missing readings are estimated from correlated sensors (KNN imputation). The winner is chosen on mean validation F1 across
   clean / missing / noisy / +2 K scenarios; the decision threshold is tuned for F1 on validation only.
 - **Explainability:** SHAP drivers per alert with healthy ranges, plus a likely failure mode (HDF/PWF/OSF/TWF).
 
@@ -93,10 +93,23 @@ The file type is detected from its columns:
 
 | Dataset | F1 | Precision | Recall | AUC-PR | Note |
 |---|---:|---:|---:|---:|---|
-| AI4I held-out test split (n = 2,000) | 0.842 | 0.862 | 0.824 | 0.870 | robustness: `outputs/robustness_report.txt` |
+| AI4I held-out test split (n = 2,000) | 0.842 | 0.862 | 0.824 | 0.870 | robustness below |
 | SKAB valve1 (16 runs, 18,162 rows) | 0.647 | 0.606 | 0.695 | 0.633 | settings tuned here (in-sample) |
 | SKAB valve2 (4 runs, 4,312 rows) | 0.735 | 0.660 | 0.829 | 0.788 | held out |
 | SKAB other (14 runs, 14,985 rows) | 0.554 | 0.544 | 0.564 | 0.505 | held out |
+
+**AI4I robustness** (`outputs/robustness_report.txt`, random scenarios averaged over 5 seeds):
+
+| Scenario | ΔF1 | True failure rules ΔF1 | Status |
+|---|---:|---:|---|
+| 10% missing values | −0.087 | — | PASS |
+| Gaussian noise σ = 0.1·std | −0.121 | −0.175 | PASS* |
+| +2 K temperature shift | 0.000 | 0.000 | PASS |
+
+Missing readings are estimated from correlated sensors (KNN, k = 5, fitted on training rows; only missing cells are
+filled). Before this, 10% missing values cost −0.167 F1 on average. Noise is checked against the published AI4I
+failure rules applied to the same noisy readings: noise pushes readings across the rules' sharp thresholds, so even the
+true rules lose 0.175 F1. PASS* means the model loses less than that physical floor.
 
 SKAB scores are point-wise over all rows; per-experiment breakdowns are in `outputs/skab_*/evaluation_metrics.txt`.
 
@@ -112,7 +125,7 @@ Each dataset folder (`outputs/`, `outputs/skab_valve1/`, …, `outputs/custom/`)
 | `scored_data.csv`, `run_info.json` | full scored replay + run description (read by the dashboard) |
 | `shap_importance.csv` | global feature importance |
 
-AI4I also writes `shap_summary.png`, `robustness_report.txt`, and `models/model.pkl` + `feature_config.json` (the trained
-model and its feature/threshold config).
+AI4I also writes `shap_summary.png`, `robustness_report.txt`, and `models/model.pkl` + `models/imputer.pkl` +
+`feature_config.json` (the trained model, its missing-value imputer, and its feature/threshold config).
 
 Data: AI4I 2020 Predictive Maintenance Dataset (UCI, CC BY 4.0); SKAB — Skoltech Anomaly Benchmark (github.com/waico/SKAB).

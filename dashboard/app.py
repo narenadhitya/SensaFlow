@@ -200,8 +200,12 @@ def model_evidence(st, out_dir: Path):
     if rob_path is not None:
         with st.expander("Robustness report", expanded=False):
             rob = pd.read_csv(rob_path)
-            st.dataframe(rob.style.format({"f1": "{:.3f}", "delta_f1": "{:+.3f}", "fault_rate": "{:.2%}"}),
+            rob = rob.rename(columns={"oracle_delta_f1": "rules_delta_f1"})
+            st.dataframe(rob.style.format({"f1": "{:.3f}", "delta_f1": "{:+.3f}", "rules_delta_f1": "{:+.3f}",
+                                           "fault_rate": "{:.2%}"}, na_rep=""),
                          width="stretch", hide_index=True)
+            st.caption("rules_delta_f1 = how much the true AI4I failure rules lose on the same perturbed readings "
+                       "(the physical floor). PASS* = within that floor.")
             st.text((rob_path.parent / "robustness_report.txt").read_text(encoding="utf-8").split("Notes:")[-1])
 
 

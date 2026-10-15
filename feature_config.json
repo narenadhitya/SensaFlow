@@ -23,7 +23,7 @@
     "M": 1,
     "H": 2
   },
-  "absent_sensor_fill": "native",
+  "missing_values": "KNN imputation (k=5) from correlated sensors, models/imputer.pkl",
   "threshold": 0.4825155763781528,
   "train_means": {
     "air_temp": 300.00665625,
