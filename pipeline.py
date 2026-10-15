@@ -1,4 +1,4 @@
-"""MachinaSense — industrial fault detection pipeline.
+"""SensaFlow — industrial fault detection pipeline.
 
 Usage:
     python pipeline.py                                   # train on AI4I, evaluate on held-out 20% split
@@ -63,7 +63,36 @@ def load_csv(path) -> pd.DataFrame:
             if alias in lookup and lookup[alias] not in rename:
                 rename[lookup[alias]] = canon
                 break
-    return df.rename(columns=rename)
+    # Fallback for sensors only: a column whose name contains an alias (e.g. "spindle_rpm", "torque_nm")
+    for canon in RAW_SENSORS:
+        if canon in rename.values():
+            continue
+        for norm, orig in lookup.items():
+            if orig not in rename and any(alias in norm for alias in ALIASES[canon]):
+                rename[orig] = canon
+                break
+    df = df.rename(columns=rename)
+    df.attrs["id_source"] = next((orig for orig, canon in rename.items() if canon == "id"), None)
+    return df
+
+
+def sensor_coverage(df: pd.DataFrame, log: list) -> list[str]:
+    """Warn when the input shares few sensors with the model — predictions would mostly reflect imputation."""
+    found = [c for c in RAW_SENSORS if c in df]
+    missing = [c for c in RAW_SENSORS if c not in df]
+    if len(missing) >= 2:
+        msg = (f"WARNING: only {len(found)}/{len(RAW_SENSORS)} model sensors found ({', '.join(found) or 'none'}); "
+               f"missing {', '.join(missing)}. Predictions will be unreliable — retrain on this data instead.")
+        log.append(msg)
+        print(msg)
+    return found
+
+
+def write_run_info(mode: str, path, df: pd.DataFrame, has_labels: bool, sensors: list[str], warnings: list[str]):
+    """Describe what outputs/ currently contains (read by the dashboard)."""
+    info = {"mode": mode, "input": Path(path).name, "rows": int(len(df)), "id_column": df.attrs.get("id_source"),
+            "has_labels": bool(has_labels), "sensors_found": sensors, "warnings": warnings}
+    (OUT_DIR / "run_info.json").write_text(json.dumps(info, indent=2))
 
 
 # ----------------------------------------------------------- feature building
@@ -414,7 +443,7 @@ def run_robustness(model, config: dict, df_te: pd.DataFrame, y_te) -> tuple[list
         results.append({"scenario": name, "f1": f1, "delta_f1": f1 - base_f1, "fault_rate": rate, "status": status})
 
     lines = [
-        "MACHINASENSE — ROBUSTNESS REPORT", "=" * 34,
+        "SENSAFLOW — ROBUSTNESS REPORT", "=" * 34,
         f"Evaluated on the held-out test split (n={len(y)}), model={config['model']}, threshold={config['threshold']:.3f}.",
         "Model trained on NaN-augmented data (10%/20% sensor dropout copies) and routes missing values natively.",
         f"Entirely absent sensors: '{config.get('absent_sensor_fill', 'mean')}' fill (see feature_config.json).",
@@ -443,6 +472,8 @@ def run_train(train_path, test_path=None):
     df = load_csv(train_path)
     if "label" not in df:
         raise SystemExit(f"No label column found in {train_path}")
+    warnings: list[str] = []
+    sensors = sensor_coverage(df, warnings)
     y_all = df["label"].astype(int)
 
     if test_path:   # external test set: use the whole train file for train/val
@@ -485,10 +516,13 @@ def run_train(train_path, test_path=None):
     log = []
     preds, X_te, alerts, detail = predict_frame(df_te, best["model"], config, log, explain_floor=DASHBOARD_EXPLAIN_FLOOR)
     write_outputs(df_te, preds, X_te, alerts, detail, y_te)
+    df_te.attrs["id_source"] = df_te.attrs.get("id_source") or df.attrs.get("id_source")
+    write_run_info("train" if not test_path else "train+test",
+                   test_path or f"{Path(train_path).name} (held-out 20% test split)", df_te, y_te is not None, sensors, warnings)
     save_global_explanations(best["model"], X_te)
 
     lines = [
-        "MACHINASENSE — EVALUATION REPORT", "=" * 34,
+        "SENSAFLOW — EVALUATION REPORT", "=" * 34,
         f"Data: {split_desc}",
         f"Samples: train={len(X_tr)} (+{len(df_aug) - len(X_tr)} NaN-augmented copies)  val={len(X_val)}  test={len(df_te)}",
         "", "MODEL SELECTION (validation split only)", "-" * 34,
@@ -527,20 +561,29 @@ def run_predict(path):
     model, config = joblib.load(MODEL_PATH), json.loads(CONFIG_PATH.read_text())
     df = load_csv(path)
     log = []
+    warnings: list[str] = []
+    sensors = sensor_coverage(df, warnings)
     preds, X, alerts, detail = predict_frame(df, model, config, log, explain_floor=DASHBOARD_EXPLAIN_FLOOR)
-    write_outputs(df, preds, X, alerts, detail, df["label"] if "label" in df else None)
+    has_labels = "label" in df
+    write_outputs(df, preds, X, alerts, detail, df["label"] if has_labels else None)
+    write_run_info("predict", path, df, has_labels, sensors, warnings)
     for l in log:
         print("[align]", l)
     print(f"{len(preds)} rows scored, {int(preds['predicted_label'].sum())} faults -> {OUT_DIR / 'predictions.csv'}")
-    if "label" in df:
-        print(metrics_block(df["label"].astype(int), preds["predicted_label"], preds["fault_probability"])[0])
+    metrics_path = OUT_DIR / "metrics.json"
+    if has_labels:     # metrics now describe this file, not the training test split
+        text, m = metrics_block(df["label"].astype(int), preds["predicted_label"], preds["fault_probability"])
+        metrics_path.write_text(json.dumps({"model": config["model"], **m}, indent=2))
+        print(text)
+    elif metrics_path.exists():
+        metrics_path.unlink()
 
 
 def main():
     import sys
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="MachinaSense fault detection pipeline")
+    ap = argparse.ArgumentParser(description="SensaFlow fault detection pipeline")
     ap.add_argument("--train", default=str(DEFAULT_DATA), help="labelled training CSV")
     ap.add_argument("--test", help="optional separate test CSV (labels optional)")
     ap.add_argument("--predict", help="score a CSV with the saved model (no training)")

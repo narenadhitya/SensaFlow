@@ -1,4 +1,4 @@
-# MachinaSense — Complete Implementation Plan
+# SensaFlow — Complete Implementation Plan
 ## PS05: Intelligent Industrial Fault Detection & Predictive Maintenance
 ### Hackathon Duration: 2.5 Hours | Solo Builder | Objective F1 Scoring
 
@@ -270,7 +270,7 @@ Document what threshold you use for classifying fault vs normal. If using `predi
 ## 7. Final Submission Package
 
 ```
-machinasense/
+sensaflow/
 ├── pipeline.py                  ← single runnable script, end-to-end
 ├── requirements.txt             ← exact package versions
 ├── feature_config.json          ← feature list + training stats for inference
@@ -301,7 +301,7 @@ timestamp, predicted_label, fault_probability, alert_severity, evidence_summary
 
 ### evaluation_metrics.txt format
 ```
-MACHINASENSE — EVALUATION REPORT
+SENSAFLOW — EVALUATION REPORT
 ==================================
 Dataset: AI4I 2020 Predictive Maintenance
 Train split: 80% (8000 samples)
@@ -410,7 +410,7 @@ Sidebar:
 
 ### Dashboard Header
 ```
-⚙  MACHINASENSE                          [● LIVE ANALYSIS]
+⚙  SENSAFLOW                          [● LIVE ANALYSIS]
 Industrial Fault Detection & Predictive Maintenance
 ─────────────────────────────────────────────────────────
 336 faults detected across 10,000 operational timesteps
@@ -453,7 +453,7 @@ HOUR 2 — EVIDENCE + UI
 ## 10. README Template (copy-paste and fill)
 
 ```markdown
-# MachinaSense — Industrial Fault Detection
+# SensaFlow — Industrial Fault Detection
 
 ## Setup
 pip install -r requirements.txt
@@ -519,5 +519,5 @@ You will do all 7. The three MEDIUM criteria are essentially free points that mo
 ```
 
 ---
-*Plan version: Final | Hackathon: Bugged Out | Problem: PS05 MachinaSense*
+*Plan version: Final | Hackathon: Bugged Out | Problem: PS05 SensaFlow*
 *Solo builder strategy — optimized for 2.5hr execution window*

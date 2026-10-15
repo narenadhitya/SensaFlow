@@ -1,4 +1,4 @@
-MACHINASENSE — EVALUATION REPORT
+SENSAFLOW — EVALUATION REPORT
 ==================================
 Data: Stratified split: 64% train / 16% validation / 20% test (seed 42)
 Samples: train=6400 (+12800 NaN-augmented copies)  val=1600  test=2000
@@ -9,7 +9,7 @@ Threshold = F1-optimal cut-off on clean validation data.
 Selection score = mean validation F1 over scenarios: clean, missing10, noise0.1, temp+2K.
 
 XGBoost       score=0.704  AUC-PR=0.865  thr=0.641  | clean=0.793  missing10=0.586  noise0.1=0.645  temp+2K=0.793
-RandomForest  score=0.751  AUC-PR=0.862  thr=0.483  | clean=0.843  missing10=0.679  noise0.1=0.649  temp+2K=0.832
+RandomForest  score=0.753  AUC-PR=0.862  thr=0.483  | clean=0.843  missing10=0.679  noise0.1=0.649  temp+2K=0.843
 
 Selected: RandomForest  (decision threshold 0.483)
 

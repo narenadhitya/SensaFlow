@@ -1,0 +1,15 @@
+{
+  "mode": "train",
+  "input": "ai4i2020.csv (held-out 20% test split)",
+  "rows": 2000,
+  "id_column": "UDI",
+  "has_labels": true,
+  "sensors_found": [
+    "air_temp",
+    "process_temp",
+    "rpm",
+    "torque",
+    "tool_wear"
+  ],
+  "warnings": []
+}

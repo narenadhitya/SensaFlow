@@ -24,7 +24,7 @@
     "H": 2
   },
   "absent_sensor_fill": "native",
-  "threshold": 0.4825155763781528,
+  "threshold": 0.4825155763781527,
   "train_means": {
     "air_temp": 300.00665625,
     "process_temp": 310.00484375,

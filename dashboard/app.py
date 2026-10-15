@@ -1,4 +1,4 @@
-"""MachinaSense dashboard — CNC spindle thermal twin driven by the pipeline outputs.
+"""SensaFlow dashboard — CNC spindle thermal twin driven by the pipeline outputs.
 
     streamlit run dashboard/app.py                 # interactive dashboard
     python dashboard/app.py --export twin.html     # standalone HTML (open in any browser, works offline)
@@ -27,10 +27,29 @@ def short_driver(text) -> str:
     return re.sub(r"\((above|below|within) normal [^)]*\)", lambda m: DIRECTION[m.group(1)], text)
 
 
+def run_info() -> dict:
+    path = OUT / "run_info.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def replay_order(ids: pd.Series) -> pd.Series:
+    """Sort key for the replay: numeric ids, else parseable datetimes, else file order."""
+    as_num = pd.to_numeric(ids, errors="coerce")
+    if as_num.notna().all():
+        return as_num
+    as_time = pd.to_datetime(ids, errors="coerce")
+    if as_time.notna().all():
+        return as_time
+    return pd.Series(np.arange(len(ids)), index=ids.index)
+
+
 def load_replay() -> dict:
     df = pd.read_csv(OUT / "scored_data.csv")
-    df = df.sort_values("timestamp", key=lambda s: pd.to_numeric(s, errors="coerce")).reset_index(drop=True)
+    df = df.iloc[np.argsort(replay_order(df["timestamp"]).values, kind="stable")].reset_index(drop=True)
     config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+    info = run_info()
+    id_col = info.get("id_column")
+    id_label = "UDI" if (id_col or "").upper() == "UDI" else ("" if id_col else "ROW")
 
     def num(col, default=np.nan):
         return pd.to_numeric(df[col], errors="coerce") if col in df else pd.Series(default, index=df.index)
@@ -65,7 +84,9 @@ def load_replay() -> dict:
             "model": config.get("model", "unknown"),
             "f1": f1,
             "threshold": config.get("threshold", 0.5),
-            "source": f"REPLAY · PIPELINE OUTPUT · {len(rows)} ROWS ORDERED BY UDI",
+            "idLabel": id_label,
+            "source": f"REPLAY · {info.get('input', 'PIPELINE OUTPUT')} · {len(rows)} ROWS"
+                      + (f" ORDERED BY {id_col}" if id_col else " IN FILE ORDER"),
         },
     }
 
@@ -97,12 +118,15 @@ def model_evidence(st):
 
     dark = dict(paper_bgcolor="#161B22", plot_bgcolor="#161B22", font=dict(color="#C9D1D9", family="JetBrains Mono, monospace"),
                 margin=dict(l=10, r=10, t=40, b=10))
+    info = run_info()
     st.markdown("#### MODEL EVIDENCE")
+    st.caption(f"Scores below are measured on: {info.get('input', 'the last pipeline run')}"
+               + " · SHAP importance and robustness come from the training run.")
     metrics_path = OUT / "metrics.json"
     if metrics_path.exists():
         m = json.loads(metrics_path.read_text())
         c = st.columns(4)
-        c[0].metric("F1 SCORE (fault)", f"{m['f1_fault']:.3f}", help="held-out 20% test split")
+        c[0].metric("F1 SCORE (fault)", f"{m['f1_fault']:.3f}", help=f"measured on {info.get('input', 'test data')}")
         c[1].metric("PRECISION", f"{m['precision']:.3f}")
         c[2].metric("RECALL", f"{m['recall']:.3f}")
         c[3].metric("AUC-PR", f"{m['aucpr']:.3f}")
@@ -112,9 +136,11 @@ def model_evidence(st):
         fig = go.Figure(go.Heatmap(z=cm, x=["Pred normal", "Pred fault"], y=["Actual normal", "Actual fault"],
                                    text=cm, texttemplate="%{text}", colorscale=[[0, "#0D1117"], [1, "#06B6D4"]],
                                    showscale=False))
-        fig.update_layout(title="Confusion matrix (test split)", height=320, yaxis_autorange="reversed", **dark)
+        fig.update_layout(title="Confusion matrix", height=320, yaxis_autorange="reversed", **dark)
         left.plotly_chart(fig, width="stretch")
     else:
+        st.info("The scored file has no failure labels, so accuracy metrics can't be computed. "
+                "Predictions, alerts and evidence are still shown above.")
         left, right = st.columns(2)
 
     shap_path = OUT / "shap_importance.csv"
@@ -139,12 +165,14 @@ def run_streamlit():
     import streamlit as st
     import streamlit.components.v1 as components
 
-    st.set_page_config(page_title="MachinaSense", page_icon="⚙", layout="wide")
+    st.set_page_config(page_title="SensaFlow", page_icon="⚙", layout="wide")
     st.markdown("<style>.block-container{padding-top:3.5rem;padding-bottom:1rem;max-width:100%}</style>",
                 unsafe_allow_html=True)
     if not (OUT / "scored_data.csv").exists():
         st.error("No pipeline outputs found. Run `python pipeline.py` first.")
         st.stop()
+    for warning in run_info().get("warnings", []):
+        st.warning(warning)
 
     d = default_props()
     with st.sidebar:
@@ -179,7 +207,7 @@ if running_in_streamlit():
 elif __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="Export the MachinaSense twin dashboard as standalone HTML")
+    ap = argparse.ArgumentParser(description="Export the SensaFlow twin dashboard as standalone HTML")
     ap.add_argument("--export", default=str(OUT / "dashboard.html"))
     args = ap.parse_args()
     Path(args.export).write_text(build_html(default_props()), encoding="utf-8")

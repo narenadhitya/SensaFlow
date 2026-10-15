@@ -1,4 +1,4 @@
-# MachinaSense — Industrial Fault Detection & Predictive Maintenance
+# SensaFlow — Industrial Fault Detection & Predictive Maintenance
 
 Detects machine failures from industrial sensor data (AI4I 2020: air/process temperature, spindle speed,
 torque, tool wear), explains every alert, and replays results on a 3D thermal twin of a CNC spindle.
@@ -34,6 +34,31 @@ Regenerate it after a new pipeline run with `python dashboard/app.py --export ou
 Controls: play/pause and 1×/2×/4× replay, **NEXT FAULT** to jump to the next alert, drag the timeline to scrub,
 click an alert to inspect it, drag the 3D model to orbit / scroll to zoom. The sidebar sets severity thresholds
 and 3D options.
+
+## Test with a new dataset
+
+The model expects the AI4I sensor types: air temperature, process temperature, rotational speed, torque and
+tool wear (product type L/M/H optional). Column names don't need to match exactly: `Ambient_Temp_K`,
+`Spindle_RPM`, `Torque_Nm` etc. are recognised. Extra columns are ignored.
+
+```bash
+# 1. Score the file with the trained model
+python pipeline.py --predict path/to/new.csv
+
+# 2. View it (the dashboard always shows the latest run in outputs/)
+streamlit run dashboard/app.py
+```
+
+- **Labels optional:** if the file has a failure column (`Machine failure`, `label`, `target`, `fault`, `failure`),
+  F1 / precision / recall are computed on it; otherwise only predictions and evidence are shown.
+- **Ordering:** a `timestamp` / `datetime` / `UDI` / `id` column drives the replay order and clock; otherwise file order.
+- **Different sensors?** If ≥2 of the 5 sensors are missing, the pipeline warns that predictions are unreliable.
+  With labelled data of the same sensor types, retrain instead: `python pipeline.py --train new.csv`
+  (or `--train train.csv --test test.csv`). Equipment with entirely different signals (e.g. vibration/pressure, as in
+  SKAB) needs the feature definitions in `pipeline.py` adapted.
+- **Try it:** `python pipeline.py --predict datasets/samples/new_machine_demo.csv`. This sample contains 800 held-out
+  AI4I rows reformatted with renamed columns, minute timestamps and an extra sensor.
+- **Back to the AI4I demo:** `python pipeline.py` regenerates the default outputs.
 
 ## Approach
 
