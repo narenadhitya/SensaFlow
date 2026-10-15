@@ -104,14 +104,85 @@ def feature_stats(X: pd.DataFrame) -> tuple[dict, dict]:
     return X.mean().to_dict(), X.std().replace(0, 1).to_dict()
 
 
-def evidence_strings(X: pd.DataFrame, means: dict, stds: dict, top_k: int = 2) -> list[str]:
-    """Per-row evidence: the features deviating most from the training distribution."""
-    z = (X - pd.Series(means)) / pd.Series(stds)
+def normal_ranges(X: pd.DataFrame, y) -> dict:
+    """5th–95th percentile of each feature on healthy (label 0) training rows."""
+    healthy = X[np.asarray(y) == 0]
+    return {c: [float(healthy[c].quantile(0.05)), float(healthy[c].quantile(0.95))] for c in X.columns}
+
+
+# ------------------------------------------------------------ explainability
+
+FEATURE_CATEGORY = {
+    **{c: "raw sensor" for c in RAW_SENSORS + ["type"]},
+    **{c: "physics-derived" for c in ["temp_delta", "power", "temp_rpm_ratio", "wear_rate", "strain"]},
+}
+
+# Which AI4I failure mode a driving feature most plausibly points to (heuristic, for operator context)
+FAULT_HINT = {
+    "temp_delta": "Heat Dissipation Failure (HDF)", "temp_rpm_ratio": "Heat Dissipation Failure (HDF)",
+    "air_temp": "Heat Dissipation Failure (HDF)", "process_temp": "Heat Dissipation Failure (HDF)",
+    "power": "Power Failure (PWF)", "rpm": "Power Failure (PWF)",
+    "strain": "Overstrain Failure (OSF)", "torque": "Overstrain Failure (OSF)",
+    "tool_wear": "Tool Wear Failure (TWF)", "wear_rate": "Tool Wear Failure (TWF)",
+}
+
+UNITS = {"air_temp": " K", "process_temp": " K", "rpm": " rpm", "torque": " Nm", "tool_wear": " min",
+         "temp_delta": " K", "power": " W", "strain": " Nm·min"}
+
+
+def shap_values(model, X: pd.DataFrame) -> np.ndarray:
+    """SHAP contributions towards the fault class, shape (n_rows, n_features)."""
+    import shap
+    sv = shap.TreeExplainer(model).shap_values(X)
+    if isinstance(sv, list):          # older shap: one array per class
+        sv = sv[1]
+    if sv.ndim == 3:                  # newer shap on sklearn: (n, f, classes)
+        sv = sv[:, :, 1]
+    return sv
+
+
+def fmt_value(feature: str, value: float) -> str:
+    num = f"{value:,.0f}" if abs(value) >= 1000 else f"{value:.4g}"
+    return f"{num}{UNITS.get(feature, '')}"
+
+
+def explain_alerts(X: pd.DataFrame, sv: np.ndarray, ranges: dict, top_k: int = 2) -> list[dict]:
+    """For each row: the top features pushing towards 'fault', with their value and healthy range."""
     out = []
-    for _, row in z.iterrows():
-        top = row.abs().sort_values(ascending=False).head(top_k)
-        out.append("; ".join(f"{f} {row[f]:+.1f}σ" for f in top.index if abs(row[f]) >= 1.0))
+    for i in range(len(X)):
+        order = np.argsort(-sv[i])[:top_k]
+        drivers = []
+        for j in order:
+            f = X.columns[j]
+            if sv[i, j] <= 0:
+                continue
+            v, (lo, hi) = X.iat[i, j], ranges[f]
+            direction = "above" if v > hi else "below" if v < lo else "within"
+            drivers.append({"feature": f, "value": float(v), "shap": float(sv[i, j]),
+                            "text": f"{f} = {fmt_value(f, v)} ({direction} normal {fmt_value(f, lo)}–{fmt_value(f, hi)})"})
+        hint = FAULT_HINT.get(drivers[0]["feature"], "Unclassified") if drivers else "Unclassified"
+        out.append({"drivers": drivers, "fault_type": hint,
+                    "summary": "; ".join(d["text"] for d in drivers)})
     return out
+
+
+def save_global_explanations(model, X: pd.DataFrame, n_sample: int = 500):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import shap
+
+    Xs = X.sample(min(n_sample, len(X)), random_state=SEED)
+    sv = shap_values(model, Xs)
+    imp = pd.DataFrame({"feature": Xs.columns, "mean_abs_shap": np.abs(sv).mean(axis=0)})
+    imp["category"] = imp["feature"].map(FEATURE_CATEGORY).fillna("other")
+    imp.sort_values("mean_abs_shap", ascending=False).to_csv(OUT_DIR / "shap_importance.csv", index=False)
+
+    shap.summary_plot(sv, Xs, show=False, max_display=12)
+    plt.title("What drives fault predictions (SHAP)")
+    plt.tight_layout()
+    plt.savefig(OUT_DIR / "shap_summary.png", dpi=150)
+    plt.close()
 
 
 # --------------------------------------------------------------------- models
@@ -187,14 +258,43 @@ def predict_frame(df: pd.DataFrame, model, config: dict, log: list) -> pd.DataFr
         "fault_probability": proba.round(4),
         "alert_severity": severity(proba, config["threshold"]),
     })
-    ev = evidence_strings(X, config["feature_means"], config["feature_stds"])
-    out["evidence_summary"] = [e if p else "" for e, p in zip(ev, pred)]
-    return out, X
+    out["evidence_summary"] = ""
+
+    # SHAP evidence for every predicted fault
+    alerts = pd.DataFrame()
+    idx = np.flatnonzero(pred)
+    if len(idx):
+        Xf = X.iloc[idx]
+        expl = explain_alerts(Xf, shap_values(model, Xf), config["normal_ranges"])
+        out.loc[out.index[idx], "evidence_summary"] = [e["summary"] for e in expl]
+        rows = []
+        for i, e in zip(idx, expl):
+            d = e["drivers"] + [{}] * 2
+            rows.append({
+                "timestamp": out.at[out.index[i], "timestamp"],
+                "alert_severity": out.at[out.index[i], "alert_severity"],
+                "confidence": round(float(proba[i]), 4),
+                "likely_fault_type": e["fault_type"],
+                "primary_driver": d[0].get("feature", ""),
+                "primary_value": d[0].get("value"),
+                "primary_shap": d[0].get("shap"),
+                "secondary_driver": d[1].get("feature", ""),
+                "secondary_value": d[1].get("value"),
+                "secondary_shap": d[1].get("shap"),
+                "evidence": e["summary"],
+            })
+        sev_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "NONE": 3}
+        alerts = (pd.DataFrame(rows)
+                  .sort_values(["alert_severity", "confidence"], key=lambda s: s.map(sev_rank) if s.name == "alert_severity" else -s)
+                  .reset_index(drop=True))
+        alerts.insert(0, "alert_id", np.arange(1, len(alerts) + 1))
+    return out, X, alerts
 
 
-def write_outputs(df, preds, X, label=None):
+def write_outputs(df, preds, X, alerts, label=None):
     OUT_DIR.mkdir(exist_ok=True)
     preds.to_csv(OUT_DIR / "predictions.csv", index=False)
+    alerts.to_csv(OUT_DIR / "fault_alerts_evidence.csv", index=False)
     # Richer table for the dashboard: sensors + derived features + predictions (+ ground truth)
     scored = pd.concat([preds.reset_index(drop=True), X.reset_index(drop=True)], axis=1)
     if label is not None:
@@ -237,6 +337,7 @@ def run_train(train_path, test_path=None):
         "train_means": raw_means,
         "feature_means": feat_means,
         "feature_stds": feat_stds,
+        "normal_ranges": normal_ranges(X_tr, y_tr),
         "n_train": len(X_tr), "n_val": len(X_val),
     }
     MODEL_DIR.mkdir(exist_ok=True)
@@ -244,8 +345,9 @@ def run_train(train_path, test_path=None):
     CONFIG_PATH.write_text(json.dumps(config, indent=2))
 
     log = []
-    preds, X_te = predict_frame(df_te, best["model"], config, log)
-    write_outputs(df_te, preds, X_te, y_te)
+    preds, X_te, alerts = predict_frame(df_te, best["model"], config, log)
+    write_outputs(df_te, preds, X_te, alerts, y_te)
+    save_global_explanations(best["model"], X_te)
 
     lines = [
         "MACHINASENSE — EVALUATION REPORT", "=" * 34,
@@ -277,8 +379,8 @@ def run_predict(path):
     model, config = joblib.load(MODEL_PATH), json.loads(CONFIG_PATH.read_text())
     df = load_csv(path)
     log = []
-    preds, X = predict_frame(df, model, config, log)
-    write_outputs(df, preds, X, df["label"] if "label" in df else None)
+    preds, X, alerts = predict_frame(df, model, config, log)
+    write_outputs(df, preds, X, alerts, df["label"] if "label" in df else None)
     for l in log:
         print("[align]", l)
     print(f"{len(preds)} rows scored, {int(preds['predicted_label'].sum())} faults -> {OUT_DIR / 'predictions.csv'}")
