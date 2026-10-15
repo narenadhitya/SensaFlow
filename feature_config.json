@@ -1,0 +1,65 @@
+{
+  "model": "XGBoost",
+  "features": [
+    "air_temp",
+    "process_temp",
+    "rpm",
+    "torque",
+    "tool_wear",
+    "type",
+    "temp_delta",
+    "power",
+    "temp_rpm_ratio",
+    "wear_rate",
+    "strain"
+  ],
+  "raw_sensors": [
+    "air_temp",
+    "process_temp",
+    "rpm",
+    "torque",
+    "tool_wear"
+  ],
+  "type_map": {
+    "L": 0,
+    "M": 1,
+    "H": 2
+  },
+  "threshold": 0.7248066663742065,
+  "train_means": {
+    "air_temp": 300.00665625,
+    "process_temp": 310.00484375,
+    "rpm": 1539.08109375,
+    "torque": 39.993671875,
+    "tool_wear": 107.2321875,
+    "type": 0.4925
+  },
+  "feature_means": {
+    "air_temp": 300.00665625,
+    "process_temp": 310.00484375,
+    "rpm": 1539.08109375,
+    "torque": 39.993671875,
+    "tool_wear": 107.2321875,
+    "type": 0.4925,
+    "temp_delta": 9.9981875,
+    "power": 6281.594843173783,
+    "temp_rpm_ratio": 0.20363678021020243,
+    "wear_rate": 0.07042540541854607,
+    "strain": 4284.7333125
+  },
+  "feature_stds": {
+    "air_temp": 1.9970401775667288,
+    "process_temp": 1.4778718836691396,
+    "rpm": 179.158813448772,
+    "torque": 10.005510700010094,
+    "tool_wear": 63.76516114466279,
+    "type": 0.6659208204784872,
+    "temp_delta": 0.9999061508548029,
+    "power": 1070.9351880810016,
+    "temp_rpm_ratio": 0.020606048964222023,
+    "wear_rate": 0.042604898226207694,
+    "strain": 2820.786041162435
+  },
+  "n_train": 6400,
+  "n_val": 1600
+}
