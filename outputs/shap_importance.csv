@@ -1,0 +1,10 @@
+feature,mean_abs_shap,category
+rpm,0.09563770165963843,raw sensor
+power,0.08289614005590598,physics-derived
+torque,0.08286779096339836,raw sensor
+strain,0.06421461062714955,physics-derived
+temp_delta_rpm,0.0580481271923435,physics-derived
+temp_delta,0.05720636194410139,physics-derived
+tool_wear,0.05155856791112284,raw sensor
+wear_rate,0.034867954269251475,physics-derived
+type,0.006709731534297286,raw sensor

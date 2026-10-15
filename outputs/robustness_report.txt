@@ -1,0 +1,30 @@
+MACHINASENSE — ROBUSTNESS REPORT
+==================================
+Evaluated on the held-out test split (n=2000), model=RandomForest, threshold=0.483.
+Model trained on NaN-augmented data (10%/20% sensor dropout copies) and routes missing values natively.
+Entirely absent sensors: 'native' fill (see feature_config.json).
+PASS criteria: ΔF1 ≥ -0.10 for missing-10%, noise σ=0.1·std and +2 K shift. Others are informational stress tests.
+
+Scenario                                               F1     ΔF1  Fault rate  Status
+------------------------------------------------------------------------------------
+Clean baseline                                      0.842  +0.000      3.25%  -
+Missing values 10% (random NaN per sensor)          0.703  -0.139      4.00%  FAIL
+Missing values 20%                                  0.636  -0.206      4.15%  INFO
+Gaussian noise σ=0.1·std                            0.746  -0.096      2.90%  PASS
+Gaussian noise σ=0.25·std                           0.493  -0.349      4.10%  INFO
+Condition shift: +2 K ambient & process temp        0.842  +0.000      3.25%  PASS
+Condition shift: temperatures ×1.1 (plan spec)      0.608  -0.234      1.70%  INFO
+Condition shift: rpm +5%                            0.525  -0.318      2.70%  INFO
+Sensor dropout: 'air_temp' removed                  0.400  -0.442      4.60%  INFO
+Sensor dropout: 'process_temp' removed              0.400  -0.442      4.60%  INFO
+Sensor dropout: 'rpm' removed                       0.603  -0.240      4.40%  INFO
+Sensor dropout: 'torque' removed                    0.559  -0.283      5.90%  INFO
+Sensor dropout: 'tool_wear' removed                 0.695  -0.147      2.50%  INFO
+
+Notes:
+  - Most critical sensor (largest F1 loss when removed): air_temp (F1 0.400).
+  - The pipeline never crashes on missing/renamed/extra columns; it logs and degrades gracefully.
+  - AI4I failure labels follow sharp physical thresholds (e.g. HDF: temp delta < 8.6 K and rpm < 1380),
+    so noise near a boundary legitimately flips the true state — some sensitivity is inherent.
+  - Multiplicative ×1.1 on Kelvin temperatures is a ~30 K shift — far outside physical operating range;
+    the +2 K scenario is the realistic 'warmer conditions' test.

@@ -1,0 +1,37 @@
+MACHINASENSE — EVALUATION REPORT
+==================================
+Data: Stratified split: 64% train / 16% validation / 20% test (seed 42)
+Samples: train=6400 (+12800 NaN-augmented copies)  val=1600  test=2000
+
+MODEL SELECTION (validation split only)
+----------------------------------
+Threshold = F1-optimal cut-off on clean validation data.
+Selection score = mean validation F1 over scenarios: clean, missing10, noise0.1, temp+2K.
+
+XGBoost       score=0.704  AUC-PR=0.865  thr=0.641  | clean=0.793  missing10=0.586  noise0.1=0.645  temp+2K=0.793
+RandomForest  score=0.751  AUC-PR=0.862  thr=0.483  | clean=0.843  missing10=0.679  noise0.1=0.649  temp+2K=0.832
+
+Selected: RandomForest  (decision threshold 0.483)
+
+RESULTS ON TEST SET
+----------------------------------
+F1 Score (fault):   0.842
+F1 Score (macro):   0.918
+Precision (fault):  0.862
+Recall (fault):     0.824
+AUC-PR:             0.870
+
+Confusion Matrix:
+               Predicted Normal  Predicted Fault
+Actual Normal              1923                9
+Actual Fault                 12               56
+
+ROBUSTNESS SUMMARY (see robustness_report.txt)
+----------------------------------
+Missing values 10% (random NaN per sensor)         F1 0.703 (Δ -0.139) FAIL
+Missing values 20%                                 F1 0.636 (Δ -0.206) INFO
+Gaussian noise σ=0.1·std                           F1 0.746 (Δ -0.096) PASS
+Gaussian noise σ=0.25·std                          F1 0.493 (Δ -0.349) INFO
+Condition shift: +2 K ambient & process temp       F1 0.842 (Δ +0.000) PASS
+Condition shift: temperatures ×1.1 (plan spec)     F1 0.608 (Δ -0.234) INFO
+Condition shift: rpm +5%                           F1 0.525 (Δ -0.318) INFO

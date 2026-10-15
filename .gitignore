@@ -1,19 +1,15 @@
-﻿# Datasets (large CSVs - exclude from git)
-datasets/
+# Datasets, trained model (models/*.pkl) and outputs/ are committed on purpose:
+# judges can inspect results and open the dashboard without re-running the pipeline.
 
 # Python
 __pycache__/
 *.py[cod]
-*.pkl
 *.egg-info/
 dist/
 build/
 .env
 venv/
 env/
-
-# Outputs (generated files)
-outputs/
 
 # OS
 .DS_Store
