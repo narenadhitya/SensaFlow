@@ -1,0 +1,633 @@
+{
+  "generated_at": "2026-10-15T11:03:43+00:00",
+  "ai4i": {
+    "dataset": "AI4I 2020 Predictive Maintenance (10,000 rows, 3.39% failures)",
+    "split": "stratified 64% train / 16% validation / 20% test (seed 42)",
+    "test_rows": 2000,
+    "model": "RandomForest",
+    "decision_threshold": 0.4825,
+    "features": [
+      "rpm",
+      "torque",
+      "tool_wear",
+      "type",
+      "temp_delta",
+      "power",
+      "wear_rate",
+      "strain",
+      "temp_delta_rpm"
+    ],
+    "missing_values": "KNN imputation (k=5) from correlated sensors, models/imputer.pkl",
+    "test_metrics": {
+      "f1_fault": 0.8421,
+      "f1_macro": 0.9183,
+      "precision": 0.8615,
+      "recall": 0.8235,
+      "auc_pr": 0.8697,
+      "confusion_matrix": {
+        "true_negative": 1923,
+        "false_positive": 9,
+        "false_negative": 12,
+        "true_positive": 56
+      }
+    },
+    "model_selection": {
+      "criterion": "mean validation F1 over clean / 10% missing / noise 0.1·std / +2 K shift; threshold = F1-optimal on clean validation",
+      "candidates": {
+        "XGBoost": {
+          "selection_score": 0.704,
+          "val_auc_pr": 0.865,
+          "threshold": 0.641,
+          "val_f1_by_scenario": {
+            "clean": 0.793,
+            "missing10": 0.586,
+            "noise0.1": 0.645,
+            "temp+2K": 0.793
+          }
+        },
+        "RandomForest": {
+          "selection_score": 0.753,
+          "val_auc_pr": 0.862,
+          "threshold": 0.483,
+          "val_f1_by_scenario": {
+            "clean": 0.843,
+            "missing10": 0.679,
+            "noise0.1": 0.649,
+            "temp+2K": 0.843
+          }
+        }
+      },
+      "selected": "RandomForest",
+      "decision_threshold": 0.483
+    },
+    "robustness": {
+      "note": "random scenarios averaged over 5 seeds; rules_delta_f1 = loss of the published AI4I failure rules on the same perturbed readings (physical floor); PASS* = within that floor",
+      "pass_criterion": "delta_f1 >= -0.10 for missing 10%, noise 0.1·std and +2 K shift",
+      "scenarios": [
+        {
+          "scenario": "Clean baseline",
+          "f1": 0.8421,
+          "delta_f1": 0.0,
+          "fault_rate": 0.0325,
+          "rules_delta_f1": 0.0,
+          "status": "-"
+        },
+        {
+          "scenario": "Missing values 10% (random NaN per sensor)",
+          "f1": 0.7553,
+          "delta_f1": -0.0868,
+          "fault_rate": 0.029,
+          "rules_delta_f1": null,
+          "status": "PASS"
+        },
+        {
+          "scenario": "Missing values 20%",
+          "f1": 0.6683,
+          "delta_f1": -0.1738,
+          "fault_rate": 0.0242,
+          "rules_delta_f1": null,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Gaussian noise σ=0.1·std",
+          "f1": 0.7211,
+          "delta_f1": -0.121,
+          "fault_rate": 0.032,
+          "rules_delta_f1": -0.175,
+          "status": "PASS*"
+        },
+        {
+          "scenario": "Gaussian noise σ=0.25·std",
+          "f1": 0.4755,
+          "delta_f1": -0.3666,
+          "fault_rate": 0.0437,
+          "rules_delta_f1": -0.4415,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Condition shift: +2 K ambient & process temp",
+          "f1": 0.8421,
+          "delta_f1": 0.0,
+          "fault_rate": 0.0325,
+          "rules_delta_f1": 0.0,
+          "status": "PASS"
+        },
+        {
+          "scenario": "Condition shift: temperatures ×1.1 (plan spec)",
+          "f1": 0.6078,
+          "delta_f1": -0.2343,
+          "fault_rate": 0.017,
+          "rules_delta_f1": -0.2857,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Condition shift: rpm +5%",
+          "f1": 0.5246,
+          "delta_f1": -0.3175,
+          "fault_rate": 0.027,
+          "rules_delta_f1": -0.343,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Sensor dropout: 'air_temp' removed",
+          "f1": 0.566,
+          "delta_f1": -0.2761,
+          "fault_rate": 0.019,
+          "rules_delta_f1": null,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Sensor dropout: 'process_temp' removed",
+          "f1": 0.5984,
+          "delta_f1": -0.2437,
+          "fault_rate": 0.0295,
+          "rules_delta_f1": null,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Sensor dropout: 'rpm' removed",
+          "f1": 0.6818,
+          "delta_f1": -0.1603,
+          "fault_rate": 0.032,
+          "rules_delta_f1": null,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Sensor dropout: 'torque' removed",
+          "f1": 0.6018,
+          "delta_f1": -0.2403,
+          "fault_rate": 0.0225,
+          "rules_delta_f1": null,
+          "status": "INFO"
+        },
+        {
+          "scenario": "Sensor dropout: 'tool_wear' removed",
+          "f1": 0.7091,
+          "delta_f1": -0.133,
+          "fault_rate": 0.021,
+          "rules_delta_f1": null,
+          "status": "INFO"
+        }
+      ]
+    },
+    "shap_top_features": [
+      {
+        "feature": "rpm",
+        "mean_abs_shap": 0.0956,
+        "category": "raw sensor"
+      },
+      {
+        "feature": "power",
+        "mean_abs_shap": 0.0829,
+        "category": "physics-derived"
+      },
+      {
+        "feature": "torque",
+        "mean_abs_shap": 0.0829,
+        "category": "raw sensor"
+      },
+      {
+        "feature": "strain",
+        "mean_abs_shap": 0.0642,
+        "category": "physics-derived"
+      },
+      {
+        "feature": "temp_delta_rpm",
+        "mean_abs_shap": 0.058,
+        "category": "physics-derived"
+      },
+      {
+        "feature": "temp_delta",
+        "mean_abs_shap": 0.0572,
+        "category": "physics-derived"
+      },
+      {
+        "feature": "tool_wear",
+        "mean_abs_shap": 0.0516,
+        "category": "raw sensor"
+      },
+      {
+        "feature": "wear_rate",
+        "mean_abs_shap": 0.0349,
+        "category": "physics-derived"
+      },
+      {
+        "feature": "type",
+        "mean_abs_shap": 0.0067,
+        "category": "raw sensor"
+      }
+    ]
+  },
+  "skab": {
+    "dataset": "SKAB - Skoltech Anomaly Benchmark (water-circulation testbed, 1 Hz, 8 sensors)",
+    "method": "IsolationForest per experiment, fitted on its first 400 s; baseline-standardised sensors + 10 s rolling mean/std; threshold = 95th percentile of baseline scores; labels used only for evaluation",
+    "groups": {
+      "valve1": {
+        "evaluation": "in-sample (window/percentile tuned here)",
+        "rows": 18162,
+        "metrics": {
+          "f1_fault": 0.6473,
+          "f1_macro": 0.7189,
+          "precision": 0.6061,
+          "recall": 0.6946,
+          "auc_pr": 0.6326,
+          "confusion_matrix": {
+            "true_negative": 9005,
+            "false_positive": 2848,
+            "false_negative": 1927,
+            "true_positive": 4382
+          }
+        },
+        "per_experiment": [
+          {
+            "experiment": "0",
+            "rows": 1148,
+            "anomaly_rate": 0.349,
+            "f1": 0.589
+          },
+          {
+            "experiment": "1",
+            "rows": 1145,
+            "anomaly_rate": 0.351,
+            "f1": 0.514
+          },
+          {
+            "experiment": "2",
+            "rows": 1075,
+            "anomaly_rate": 0.313,
+            "f1": 0.592
+          },
+          {
+            "experiment": "3",
+            "rows": 1149,
+            "anomaly_rate": 0.352,
+            "f1": 0.254
+          },
+          {
+            "experiment": "4",
+            "rows": 1095,
+            "anomaly_rate": 0.319,
+            "f1": 0.629
+          },
+          {
+            "experiment": "5",
+            "rows": 1154,
+            "anomaly_rate": 0.349,
+            "f1": 0.675
+          },
+          {
+            "experiment": "6",
+            "rows": 1154,
+            "anomaly_rate": 0.351,
+            "f1": 0.317
+          },
+          {
+            "experiment": "7",
+            "rows": 1094,
+            "anomaly_rate": 0.37,
+            "f1": 0.723
+          },
+          {
+            "experiment": "8",
+            "rows": 1144,
+            "anomaly_rate": 0.35,
+            "f1": 0.74
+          },
+          {
+            "experiment": "9",
+            "rows": 1148,
+            "anomaly_rate": 0.35,
+            "f1": 0.696
+          },
+          {
+            "experiment": "10",
+            "rows": 1146,
+            "anomaly_rate": 0.35,
+            "f1": 0.706
+          },
+          {
+            "experiment": "11",
+            "rows": 1141,
+            "anomaly_rate": 0.35,
+            "f1": 0.585
+          },
+          {
+            "experiment": "12",
+            "rows": 1140,
+            "anomaly_rate": 0.35,
+            "f1": 0.715
+          },
+          {
+            "experiment": "13",
+            "rows": 1140,
+            "anomaly_rate": 0.35,
+            "f1": 0.805
+          },
+          {
+            "experiment": "14",
+            "rows": 1139,
+            "anomaly_rate": 0.35,
+            "f1": 0.806
+          },
+          {
+            "experiment": "15",
+            "rows": 1150,
+            "anomaly_rate": 0.351,
+            "f1": 0.605
+          }
+        ],
+        "shap_top_sensors": [
+          {
+            "feature": "Volume Flow RateRMS",
+            "mean_abs_shap": 0.7799,
+            "category": "FLOW"
+          },
+          {
+            "feature": "Thermocouple",
+            "mean_abs_shap": 0.5397,
+            "category": "TEMP"
+          },
+          {
+            "feature": "Temperature",
+            "mean_abs_shap": 0.4719,
+            "category": "TEMP"
+          },
+          {
+            "feature": "Accelerometer2RMS",
+            "mean_abs_shap": 0.3475,
+            "category": "VIB"
+          },
+          {
+            "feature": "Pressure",
+            "mean_abs_shap": 0.3473,
+            "category": "FLOW"
+          },
+          {
+            "feature": "Voltage",
+            "mean_abs_shap": 0.311,
+            "category": "ELEC"
+          },
+          {
+            "feature": "Accelerometer1RMS",
+            "mean_abs_shap": 0.2979,
+            "category": "VIB"
+          },
+          {
+            "feature": "Current",
+            "mean_abs_shap": 0.289,
+            "category": "ELEC"
+          }
+        ]
+      },
+      "valve2": {
+        "evaluation": "held out",
+        "rows": 4312,
+        "metrics": {
+          "f1_fault": 0.7348,
+          "f1_macro": 0.7801,
+          "precision": 0.6597,
+          "recall": 0.8293,
+          "auc_pr": 0.7879,
+          "confusion_matrix": {
+            "true_negative": 2146,
+            "false_positive": 649,
+            "false_negative": 259,
+            "true_positive": 1258
+          }
+        },
+        "per_experiment": [
+          {
+            "experiment": "0",
+            "rows": 1125,
+            "anomaly_rate": 0.35,
+            "f1": 0.729
+          },
+          {
+            "experiment": "1",
+            "rows": 1063,
+            "anomaly_rate": 0.313,
+            "f1": 0.466
+          },
+          {
+            "experiment": "2",
+            "rows": 1129,
+            "anomaly_rate": 0.35,
+            "f1": 0.805
+          },
+          {
+            "experiment": "3",
+            "rows": 995,
+            "anomaly_rate": 0.397,
+            "f1": 0.858
+          }
+        ],
+        "shap_top_sensors": [
+          {
+            "feature": "Volume Flow RateRMS",
+            "mean_abs_shap": 0.7497,
+            "category": "FLOW"
+          },
+          {
+            "feature": "Temperature",
+            "mean_abs_shap": 0.7083,
+            "category": "TEMP"
+          },
+          {
+            "feature": "Thermocouple",
+            "mean_abs_shap": 0.5583,
+            "category": "TEMP"
+          },
+          {
+            "feature": "Accelerometer2RMS",
+            "mean_abs_shap": 0.3527,
+            "category": "VIB"
+          },
+          {
+            "feature": "Pressure",
+            "mean_abs_shap": 0.3295,
+            "category": "FLOW"
+          },
+          {
+            "feature": "Voltage",
+            "mean_abs_shap": 0.2942,
+            "category": "ELEC"
+          },
+          {
+            "feature": "Accelerometer1RMS",
+            "mean_abs_shap": 0.2692,
+            "category": "VIB"
+          },
+          {
+            "feature": "Current",
+            "mean_abs_shap": 0.2514,
+            "category": "ELEC"
+          }
+        ]
+      },
+      "other": {
+        "evaluation": "held out",
+        "rows": 14985,
+        "metrics": {
+          "f1_fault": 0.5539,
+          "f1_macro": 0.647,
+          "precision": 0.544,
+          "recall": 0.5642,
+          "auc_pr": 0.5053,
+          "confusion_matrix": {
+            "true_negative": 7009,
+            "false_positive": 2561,
+            "false_negative": 2360,
+            "true_positive": 3055
+          }
+        },
+        "per_experiment": [
+          {
+            "experiment": "9",
+            "rows": 751,
+            "anomaly_rate": 0.258,
+            "f1": 0.643
+          },
+          {
+            "experiment": "11",
+            "rows": 665,
+            "anomaly_rate": 0.577,
+            "f1": 0.03
+          },
+          {
+            "experiment": "12",
+            "rows": 1137,
+            "anomaly_rate": 0.35,
+            "f1": 0.603
+          },
+          {
+            "experiment": "13",
+            "rows": 968,
+            "anomaly_rate": 0.411,
+            "f1": 0.801
+          },
+          {
+            "experiment": "14",
+            "rows": 1153,
+            "anomaly_rate": 0.356,
+            "f1": 0.68
+          },
+          {
+            "experiment": "15",
+            "rows": 1147,
+            "anomaly_rate": 0.35,
+            "f1": 0.378
+          },
+          {
+            "experiment": "16",
+            "rows": 1091,
+            "anomaly_rate": 0.317,
+            "f1": 0.437
+          },
+          {
+            "experiment": "17",
+            "rows": 1147,
+            "anomaly_rate": 0.351,
+            "f1": 0.449
+          },
+          {
+            "experiment": "18",
+            "rows": 1145,
+            "anomaly_rate": 0.351,
+            "f1": 0.547
+          },
+          {
+            "experiment": "19",
+            "rows": 1326,
+            "anomaly_rate": 0.443,
+            "f1": 0.395
+          },
+          {
+            "experiment": "20",
+            "rows": 1191,
+            "anomaly_rate": 0.379,
+            "f1": 0.61
+          },
+          {
+            "experiment": "21",
+            "rows": 1141,
+            "anomaly_rate": 0.351,
+            "f1": 0.68
+          },
+          {
+            "experiment": "22",
+            "rows": 1079,
+            "anomaly_rate": 0.314,
+            "f1": 0.454
+          },
+          {
+            "experiment": "23",
+            "rows": 1044,
+            "anomaly_rate": 0.288,
+            "f1": 0.623
+          }
+        ],
+        "shap_top_sensors": [
+          {
+            "feature": "Thermocouple",
+            "mean_abs_shap": 0.6941,
+            "category": "TEMP"
+          },
+          {
+            "feature": "Accelerometer2RMS",
+            "mean_abs_shap": 0.6383,
+            "category": "VIB"
+          },
+          {
+            "feature": "Accelerometer1RMS",
+            "mean_abs_shap": 0.6329,
+            "category": "VIB"
+          },
+          {
+            "feature": "Volume Flow RateRMS",
+            "mean_abs_shap": 0.5997,
+            "category": "FLOW"
+          },
+          {
+            "feature": "Temperature",
+            "mean_abs_shap": 0.4569,
+            "category": "TEMP"
+          },
+          {
+            "feature": "Pressure",
+            "mean_abs_shap": 0.3639,
+            "category": "FLOW"
+          },
+          {
+            "feature": "Current",
+            "mean_abs_shap": 0.3349,
+            "category": "ELEC"
+          },
+          {
+            "feature": "Voltage",
+            "mean_abs_shap": 0.2774,
+            "category": "ELEC"
+          }
+        ]
+      }
+    }
+  },
+  "custom_file": {
+    "input": "new_machine_demo.csv",
+    "model": "RandomForest",
+    "rows": 800,
+    "metrics": {
+      "f1_fault": 0.8235,
+      "f1_macro": 0.9098,
+      "precision": 0.875,
+      "recall": 0.7778,
+      "auc_pr": 0.7628,
+      "confusion_matrix": {
+        "true_negative": 780,
+        "false_positive": 2,
+        "false_negative": 4,
+        "true_positive": 14
+      }
+    },
+    "note": "last file scored with `pipeline.py --predict`"
+  }
+}
