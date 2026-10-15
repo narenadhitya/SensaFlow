@@ -259,6 +259,8 @@ class App extends Component {
 
   // ---------- lifecycle ----------
   componentDidMount() {
+    this._onResize = () => this.forceUpdate();
+    window.addEventListener('resize', this._onResize);
     const { hi, med } = this.thresholds();
     const first = this.alerts(hi, med)[0];
     if (first) this.setState({ t: Math.max(0, first.start - 18) });
@@ -270,6 +272,7 @@ class App extends Component {
   }
   componentWillUnmount() {
     this.dead = true;
+    window.removeEventListener('resize', this._onResize);
     clearInterval(this.timer); clearTimeout(this._wait); cancelAnimationFrame(this.raf);
     if (this.ro) this.ro.disconnect();
     if (this.renderer) this.renderer.dispose();
@@ -523,6 +526,7 @@ class App extends Component {
       bannerText: (sev === 'HIGH' ? 'FAULT' : 'WARNING') + ' · ' + (ft ? this.TYPE_NAME[ft].toUpperCase() + ' · ' + this.PART_NAME[this.PART_OF[ft]].toUpperCase() : 'UNCLASSIFIED') + ' · p=' + row.prob.toFixed(2),
       loading: !this.state.ready,
       loadingText: this.state.glError ? 'WebGL unavailable: the 3D view could not start in this browser.' : 'Loading 3D model…',
+      compact: !!this.props.compact || window.innerWidth < 900,
       badge: this.P.badge(row, (k, v) => this.fmt(k, v)),
       subtitle: this.P.subtitle, trainedOn: this.P.trainedOn, gaugeTitle: this.P.gaugeTitle, modeNote: this.P.modeNote,
       filters: ['ALL', 'HIGH', 'MED'].map((f) => ({ label: f, pressed: filter === f, pick: pick('filter', f), bg: filter === f ? '#30363D' : 'transparent', fg: filter === f ? '#E6EDF3' : '#8B949E' })),
@@ -574,7 +578,7 @@ ${!window.SF.embedded && html`<div class="sf-mono" style="font-size: 18px; font-
 
 <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch">
 
-<section aria-label="Sensor readings" style="flex: 1 1 250px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<section aria-label="Sensor readings" style=${`flex: ${v.compact ? "1 1 300px" : "1 1 230px"}; min-width: 0; display: flex; flex-direction: column; gap: 16px`}>
 <div style="background: linear-gradient(180deg, #151C26 0%, #121821 100%); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; box-shadow: 0 12px 28px rgba(0,0,0,0.28); padding: 16px 18px 12px">
 <h2 class="sf-h2" style="margin: 0 0 4px">${v.gaugeTitle}</h2>
 <svg viewBox="0 0 200 118" style="width: 100%; max-width: 250px; display: block; margin: 0 auto" role="img" aria-label=${'Fault probability gauge, ' + v.probPct}>
@@ -606,8 +610,8 @@ ${v.sensors.map((s) => html`
 </div>
 </section>
 
-<section aria-label="3D thermal model" style="flex: 999 1 420px; min-width: 0">
-<div style=${`position: relative; height: 640px; background: radial-gradient(120% 90% at 50% 35%, #111823 0%, #0A0E13 70%); border: 1px solid ${v.vpBorder}; border-radius: 14px; overflow: hidden; box-shadow: 0 12px 28px rgba(0,0,0,0.28)`}>
+<section aria-label="3D thermal model" style=${v.compact ? "flex: 1 1 100%; order: -1; min-width: 0" : "flex: 999 1 400px; min-width: 0"}>
+<div style=${`position: relative; height: ${v.compact ? 540 : 640}px; background: radial-gradient(120% 90% at 50% 35%, #111823 0%, #0A0E13 70%); border: 1px solid ${v.vpBorder}; border-radius: 14px; overflow: hidden; box-shadow: 0 12px 28px rgba(0,0,0,0.28)`}>
 <div style="position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px); background-size: 40px 40px"></div>
 <canvas ref=${v.setCanvas} role="img" aria-label="3D model of the equipment coloured by heat. Drag to orbit, scroll to zoom." style="position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab"></canvas>
 <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none" aria-hidden="true">
@@ -651,7 +655,7 @@ ${v.loading && html`
 </div>
 </section>
 
-<section aria-label="Alerts and failure modes" style="flex: 1 1 270px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<section aria-label="Alerts and failure modes" style=${`flex: ${v.compact ? "1 1 300px" : "1 1 250px"}; min-width: 0; display: flex; flex-direction: column; gap: 16px`}>
 <div style="background: linear-gradient(180deg, #151C26 0%, #121821 100%); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; box-shadow: 0 12px 28px rgba(0,0,0,0.28); padding: 16px 18px; display: flex; flex-direction: column; min-height: 0">
 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px">
 <h2 class="sf-h2" style="margin: 0">ALERT FEED</h2>

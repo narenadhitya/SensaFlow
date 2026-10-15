@@ -242,7 +242,7 @@ def model_evidence(st, out_dir: Path):
 
 def display_settings(st, name: str, d: dict) -> tuple[dict, bool]:
     """Thresholds and 3D options, tucked into a popover above the twin."""
-    with st.popover("⚙ Display", width="content"):
+    with st.popover("Display", icon=":material/tune:", width="content"):
         st.markdown('<div class="sf-label">Severity</div>', unsafe_allow_html=True)
         med = st.slider("Medium threshold", 0.2, 0.79, d["medThreshold"], 0.01, key=f"med_{name}",
                         help=f"Default = the model's decision threshold ({d['medThreshold']})")
@@ -282,7 +282,12 @@ def run_streamlit():
         st.query_params["dataset"] = slugs[name]
     out_dir = DATASETS[name]
 
-    main, side = st.columns([3, 1.12], gap="medium")
+    # The AI analyst is a collapsible right-hand panel (closed by default so the twin gets the full width).
+    analyst_open = st.session_state.setdefault("analyst_open", False)
+    if analyst_open:
+        main, side = st.columns([3, 1.12], gap="medium")
+    else:
+        main, side = st.container(), None
     with main:
         if not available(out_dir):
             st.warning(f"No outputs for **{name}** yet. Generate them with:")
@@ -290,15 +295,28 @@ def run_streamlit():
             st.stop()
         for warning in info.get("warnings", []):
             st.warning(warning)
-        props, evidence = display_settings(st, name, default_props(out_dir))
+        with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+            props, evidence = display_settings(st, name, default_props(out_dir))
+            if not analyst_open:
+                st.button("AI analyst", icon=":material/forum:", key="open_analyst", on_click=_toggle_analyst,
+                          help="Open the AI analyst panel")
+        # With the panel open the twin switches to its compact layout (3D on top, panels below).
+        # Frame heights = measured content height of each layout + a small margin.
         # components.html (not st.iframe): verified to start the WebGL view inside Streamlit 1.66
-        # measured content height at ~1000-1200 px wide: CNC twin ~1070 px, SKAB rig (8 sensors) ~1210 px
-        height = 1230 if info.get("profile") == "skab" else 1090
+        props["compact"] = analyst_open
+        skab = info.get("profile") == "skab"
+        height = (1760 if skab else 1670) if analyst_open else (1260 if skab else 1070)
         components.html(build_html(props, out_dir, embedded=True), height=height, scrolling=True)
         if evidence:
             model_evidence(st, out_dir)
-    with side:   # filled last, so answering a question never delays or reloads the twin
-        analyst_panel(st, name, slugs[name], out_dir)
+    if side is not None:
+        with side:   # filled last, so answering a question never delays or reloads the twin
+            analyst_panel(st, name, slugs[name], out_dir)
+
+
+def _toggle_analyst():
+    import streamlit as st
+    st.session_state["analyst_open"] = not st.session_state.get("analyst_open", False)
 
 
 def analyst_panel(st, name: str, slug: str, out_dir: Path):
@@ -307,7 +325,10 @@ def analyst_panel(st, name: str, slug: str, out_dir: Path):
 
     online = assistant.api_key() is not None
     st.markdown('<div class="sf-analyst"></div>', unsafe_allow_html=True)
-    st.markdown("#### AI analyst")
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.markdown("#### AI analyst")
+        st.button("Hide", icon=":material/close:", key="close_analyst", on_click=_toggle_analyst, type="tertiary",
+                  help="Hide the analyst panel (the twin gets the full width again)")
     st.markdown(f'<div class="sf-status"><span class="sf-dot" style="background:{"#10B981" if online else "#F59E0B"}">'
                 f'</span>{"Online · free model via OpenRouter" if online else "Offline · built-in summaries (no API key)"}'
                 f'</div>', unsafe_allow_html=True)
