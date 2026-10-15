@@ -1,0 +1,20 @@
+﻿# Datasets (large CSVs - exclude from git)
+datasets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pkl
+*.egg-info/
+dist/
+build/
+.env
+venv/
+env/
+
+# Outputs (generated files)
+outputs/
+
+# OS
+.DS_Store
+Thumbs.db
