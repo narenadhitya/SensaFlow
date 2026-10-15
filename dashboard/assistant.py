@@ -57,7 +57,8 @@ Rules:
 - You cannot see the live replay cursor. If asked "what is happening now", explain the run overall and ask for the
   timestamp or UDI shown on the dashboard clock.
 - Explain technical terms the first time you use them. Be concise: short paragraphs or bullets, normally under 180
-  words unless the user asks for detail. Use Markdown. Don't invent sensors, faults or causes beyond the data.
+  words unless the user asks for detail. Use Markdown, but never tables (the chat panel is narrow) and no headings
+  larger than bold text. Don't invent sensors, faults or causes beyond the data.
 
 Glossary:
 {glossary}
@@ -290,8 +291,27 @@ class AnalystError(RuntimeError):
     pass
 
 
+def _tables_to_bullets(text: str) -> str:
+    """The chat column is narrow: turn any Markdown table into '- col: value · col: value' bullets."""
+    out, header = [], None
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.strip().startswith("|") else None
+        if cells is None:
+            header = None
+            out.append(line)
+        elif all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+            continue                                    # |---|---| separator
+        elif header is None:
+            header = cells
+        else:
+            pairs = [f"{h}: {c}" if h else c for h, c in zip(header, cells) if c]
+            out.append("- " + " · ".join(pairs))
+    return "\n".join(out)
+
+
 def _clean(text: str) -> str:
-    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+    return _tables_to_bullets(text)
 
 
 def _call(model: str, messages: list[dict], key: str) -> tuple[str, str]:

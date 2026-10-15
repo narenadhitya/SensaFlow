@@ -1,10 +1,17 @@
 [theme]
 base = "dark"
-primaryColor = "#06B6D4"
-backgroundColor = "#0D1117"
-secondaryBackgroundColor = "#161B22"
-textColor = "#C9D1D9"
-font = "monospace"
+primaryColor = "#22D3EE"
+backgroundColor = "#0B0F14"
+secondaryBackgroundColor = "#141B24"
+textColor = "#D6DEE7"
+borderColor = "#222B36"
+baseRadius = "0.75rem"
+buttonRadius = "0.6rem"
+font = "sans-serif"
+showSidebarBorder = false
+
+[client]
+toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false

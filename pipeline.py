@@ -4,7 +4,7 @@ Usage:
     python pipeline.py                                   # train on AI4I, evaluate on held-out 20% split -> outputs/
     python pipeline.py --train data/train.csv --test data/test.csv
     python pipeline.py --skab                            # SKAB valve1/valve2/other with IsolationForest -> outputs/skab_*/
-    python pipeline.py --predict data/unseen.csv         # score a new file -> outputs/custom/
+    python pipeline.py --predict data/unseen.csv         # score a new file -> outputs/custom/ (+ Telegram alerts)
                                                          # (AI4I-style sensors: saved model; SKAB-style: IsolationForest)
 """
 import argparse
@@ -826,8 +826,16 @@ def run_train(train_path, test_path=None):
     print(report)
 
 
-def run_predict(path):
-    """Score a new file into outputs/custom/. SKAB-style sensor files use the IsolationForest method."""
+def run_predict(path, notify: bool = True):
+    """Score a new file into outputs/custom/, then send a Telegram alert digest if configured (notify.py)."""
+    _score_new_file(path)
+    if notify:
+        import notify as telegram
+        print(telegram.notify_run(CUSTOM_DIR))
+
+
+def _score_new_file(path):
+    """SKAB-style sensor files use the IsolationForest method; AI4I-style files the saved model."""
     out_dir = CUSTOM_DIR
     for stale in out_dir.glob("*") if out_dir.exists() else []:
         stale.unlink()
@@ -866,9 +874,10 @@ def main():
     ap.add_argument("--test", help="optional separate test CSV (labels optional)")
     ap.add_argument("--predict", help="score a new CSV (no training) -> outputs/custom/")
     ap.add_argument("--skab", action="store_true", help="run the SKAB benchmark (valve1, valve2, other) -> outputs/skab_*/")
+    ap.add_argument("--no-notify", action="store_true", help="with --predict: don't send the Telegram alert digest")
     args = ap.parse_args()
     if args.predict:
-        run_predict(args.predict)
+        run_predict(args.predict, notify=not args.no_notify)
     elif args.skab:
         run_skab()
     else:
