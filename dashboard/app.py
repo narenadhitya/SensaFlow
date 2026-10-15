@@ -217,10 +217,19 @@ def run_streamlit():
     st.markdown("<style>.block-container{padding-top:3.5rem;padding-bottom:1rem;max-width:100%}</style>",
                 unsafe_allow_html=True)
 
+    # ?dataset=<slug> selects a dataset, and the URL follows the sidebar so every view is linkable
+    slugs = {n: ("ai4i" if p == OUT else p.name) for n, p in DATASETS.items()}
+    names = list(DATASETS)
+    if "dataset" not in st.session_state:      # first load only: honour the URL; afterwards the sidebar rules
+        wanted = st.query_params.get("dataset")
+        st.session_state["dataset"] = next((n for n in names if slugs[n] == wanted), names[0])
     with st.sidebar:
         st.markdown("### DATASET")
-        name = st.radio("Dataset", list(DATASETS), label_visibility="collapsed",
+        # fixed key and no `index`: a changing default would make Streamlit recreate the widget and drop clicks
+        name = st.radio("Dataset", names, key="dataset", label_visibility="collapsed",
                         format_func=lambda n: n if available(DATASETS[n]) else f"{n} (not generated)")
+    if st.query_params.get("dataset") != slugs[name]:
+        st.query_params["dataset"] = slugs[name]
     out_dir = DATASETS[name]
     if not available(out_dir):
         st.warning(f"No outputs for **{name}** yet. Generate them with:")
