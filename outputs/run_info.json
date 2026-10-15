@@ -1,5 +1,7 @@
 {
   "mode": "train",
+  "profile": "ai4i",
+  "model": "RandomForest",
   "input": "ai4i2020.csv (held-out 20% test split)",
   "rows": 2000,
   "id_column": "UDI",

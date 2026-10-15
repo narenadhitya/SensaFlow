@@ -1,0 +1,20 @@
+{
+  "mode": "skab",
+  "profile": "skab",
+  "model": "IsolationForest",
+  "input": "SKAB valve1",
+  "rows": 18162,
+  "id_column": "datetime",
+  "has_labels": true,
+  "sensors_found": [
+    "Accelerometer1RMS",
+    "Accelerometer2RMS",
+    "Current",
+    "Pressure",
+    "Temperature",
+    "Thermocouple",
+    "Voltage",
+    "Volume Flow RateRMS"
+  ],
+  "warnings": []
+}

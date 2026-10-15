@@ -1,0 +1,27 @@
+SENSAFLOW — SKAB EVALUATION REPORT
+==================================
+Data: SKAB valve2 (4 file(s), 4312 rows at 1 Hz)
+Method: IsolationForest (200 trees) fitted per stream on its first 400 rows (normal start-up);
+        features = baseline-standardised sensors + 10 s rolling mean/std; threshold = 95th percentile of baseline scores.
+Labels are never used for fitting — only for the evaluation below.
+Held-out group: no settings were tuned on it.
+
+POINT-WISE RESULTS (all rows)
+----------------------------------
+F1 Score (fault):   0.735
+F1 Score (macro):   0.780
+Precision (fault):  0.660
+Recall (fault):     0.829
+AUC-PR:             0.788
+
+Confusion Matrix:
+               Predicted Normal  Predicted Fault
+Actual Normal              2146              649
+Actual Fault                259             1258
+
+PER EXPERIMENT
+----------------------------------
+0            rows=1125  anomaly rate=35.0%  F1=0.729
+1            rows=1063  anomaly rate=31.3%  F1=0.466
+2            rows=1129  anomaly rate=35.0%  F1=0.805
+3            rows=995   anomaly rate=39.7%  F1=0.858

@@ -31,30 +31,162 @@ a{color:#06B6D4}a:hover{color:#67E8F9}
 <div id="root"></div>
 <script>
 const { html, render, Component } = htmPreact;
+// ---------- equipment profiles: one per sensor domain (geometry, sensors, failure modes) ----------
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const PROFILES = {
+  ai4i: {
+    subtitle: 'Industrial fault detection · CNC spindle thermal twin',
+    trainedOn: 'Trained on: AI4I 2020',
+    gaugeTitle: 'FAULT PROBABILITY',
+    speeds: [1, 2, 4],
+    TYPE_NAME: { HDF: 'Heat dissipation failure', PWF: 'Power failure', OSF: 'Overstrain failure', TWF: 'Tool wear failure' },
+    PART_OF: { HDF: 'housing', PWF: 'motor', OSF: 'spindle', TWF: 'tool' },
+    PART_NAME: { housing: 'spindle head', motor: 'motor', spindle: 'spindle', tool: 'cutting tool' },
+    DRIVERS: { HDF: ['delta', 'rpm', 'proc'], PWF: ['power', 'torque', 'rpm'], OSF: ['strain', 'torque', 'wear'], TWF: ['wear', 'strain'] },
+    F: {
+      air: { name: 'air_temp', label: 'AIR TEMP', unit: 'K', d: 1 },
+      proc: { name: 'process_temp', label: 'PROCESS TEMP', unit: 'K', d: 1 },
+      delta: { name: 'temp_delta', label: 'TEMP DELTA', unit: 'K', d: 2 },
+      rpm: { name: 'rpm', label: 'SPINDLE SPEED', unit: 'rpm', d: 0 },
+      torque: { name: 'torque', label: 'TORQUE', unit: 'Nm', d: 1 },
+      power: { name: 'power', label: 'POWER', unit: 'kW', d: 2, scale: 0.001 },
+      wear: { name: 'tool_wear', label: 'TOOL WEAR', unit: 'min', d: 0 },
+      strain: { name: 'torque×wear', label: 'STRAIN', unit: '', d: 0 },
+    },
+    sensorKeys: ['air', 'proc', 'delta', 'rpm', 'torque', 'power', 'wear'],
+    modeCodes: ['HDF', 'PWF', 'OSF', 'TWF'],
+    modeNote: 'RNF (random failure) has no part signature and is not localised on the model.',
+    ANCH: [[0, 2.95, 0.3], [0, 1.85, 0.55], [0, 0.7, 0.2], [0, -0.38, 0.05]],
+    target: [0, 0.85, 0], orbitR: 10, spinPos: [0, 0, 0],
+    spinRate: (row) => (row.rpm / 60) * Math.PI * 2 * 0.06,
+    heats(row) {
+      const n = (v, a, b) => clamp01((v - a) / (b - a));
+      return {
+        amb: 0.1 + 0.22 * n(row.air, 297, 306),
+        housing: 0.5 * n(row.proc, 306, 314) + 0.55 * n(10.6 - row.delta, 0, 2.6),
+        motor: n(row.power, 5200, 13500),
+        spindle: 0.75 * n(row.strain, 1500, 11500) + 0.25 * n(row.rpm, 1350, 2100),
+        tool: n(row.wear, 20, 250),
+      };
+    },
+    hotspots: (c) => [[0, 2.8, 0, 0.5, c.motor], [0, 1.8, 0, 0.68, c.housing], [0, 0.68, 0, 0.42, c.spindle], [0, -0.42, 0, 0.3, c.tool], [0, -0.66, 0, 0.33, c.tool * 0.5]],
+    parts: (row, h, fmt) => [
+      { key: 'motor', name: 'MOTOR', code: 'PWF', side: 'right', sig: fmt('power', row.power) + ' kW · ' + fmt('rpm', row.rpm) + ' rpm', heat: h.motor },
+      { key: 'housing', name: 'SPINDLE HEAD', code: 'HDF', side: 'left', sig: fmt('proc', row.proc) + ' K · Δ ' + fmt('delta', row.delta) + ' K', heat: Math.min(1, h.housing) },
+      { key: 'spindle', name: 'SPINDLE', code: 'OSF', side: 'right', sig: fmt('torque', row.torque) + ' Nm · strain ' + fmt('strain', row.strain), heat: Math.min(1, h.spindle) },
+      { key: 'tool', name: 'CUTTING TOOL', code: 'TWF', side: 'left', sig: 'wear ' + fmt('wear', row.wear) + ' min', heat: h.tool },
+    ],
+    badge: (row, fmt) => ({ value: fmt('rpm', row.rpm), unit: 'RPM' }),
+    build(add, THREE, spin) {
+      // frame: base, table, workpiece, column, ram
+      add(new THREE.BoxGeometry(4.2, 0.3, 3.0, 10, 2, 8), 'frame', 0, -1.45, -0.3, null, 0, 20);
+      add(new THREE.BoxGeometry(2.6, 0.2, 1.8, 8, 1, 6), 'frame', 0, -1.2, 0.2, null, 0, 20);
+      add(new THREE.BoxGeometry(1.2, 0.45, 0.9, 8, 3, 6), 'frame', 0, -0.875, 0.05, null, 0, 20);
+      add(new THREE.BoxGeometry(1.0, 4.8, 0.8, 4, 20, 4), 'frame', 0, 0.85, -1.35, null, 0, 20);
+      add(new THREE.BoxGeometry(0.7, 0.6, 0.9, 4, 4, 6), 'frame', 0, 1.85, -0.85, null, 0, 20);
+      // spindle head housing (HDF)
+      add(new THREE.BoxGeometry(1.3, 1.0, 1.1, 10, 8, 10), 'housing', 0, 1.8, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.36, 0.38, 0.22, 48, 2), 'housing', 0, 1.19, 0, null, 0, 20);
+      // motor (PWF) with cooling fins
+      add(new THREE.CylinderGeometry(0.5, 0.5, 0.95, 48, 14), 'motor', 0, 2.8, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.3, 0.42, 0.18, 48, 2), 'motor', 0, 3.365, 0, null, 0, 20);
+      for (let i = 0; i < 6; i++) add(new THREE.TorusGeometry(0.53, 0.032, 6, 48), 'motor', 0, 2.44 + i * 0.145, 0, null, Math.PI / 2, 0);
+      // rotating spindle (OSF) + holder + tool (TWF)
+      add(new THREE.CylinderGeometry(0.26, 0.26, 0.8, 48, 12), 'spindle', 0, 0.68, 0, spin, 0, 20);
+      add(new THREE.CylinderGeometry(0.24, 0.12, 0.3, 48, 4), 'spindle', 0, 0.13, 0, spin, 0, 20);
+      add(new THREE.CylinderGeometry(0.07, 0.06, 0.62, 24, 12), 'tool', 0, -0.31, 0, spin, 0, 20);
+      const pts = [];
+      for (let i = 0; i <= 160; i++) { const u = i / 160, a = u * Math.PI * 7; pts.push(new THREE.Vector3(Math.cos(a) * 0.07, -0.6 + u * 0.48, Math.sin(a) * 0.07)); }
+      add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 220, 0.022, 6, false), 'tool', 0, 0, 0, spin, 0, 0);
+    },
+  },
+
+  skab: {
+    subtitle: 'Anomaly detection · water-circulation testbed twin (SKAB)',
+    trainedOn: 'Baseline: first 400 s of each run (unsupervised)',
+    gaugeTitle: 'ANOMALY SCORE (CALIBRATED)',
+    speeds: [5, 20, 60],
+    TYPE_NAME: { VIB: 'Pump vibration anomaly', ELEC: 'Motor electrical anomaly', FLOW: 'Valve / flow anomaly', TEMP: 'Thermal anomaly' },
+    PART_OF: { VIB: 'pump', ELEC: 'motor', FLOW: 'valve', TEMP: 'tank' },
+    PART_NAME: { pump: 'pump', motor: 'motor', valve: 'valve', tank: 'fluid loop' },
+    DRIVERS: { VIB: ['acc1', 'acc2'], ELEC: ['current', 'voltage'], FLOW: ['flow', 'pressure'], TEMP: ['thermo', 'temp'] },
+    F: {
+      acc1: { name: 'Accelerometer1RMS', label: 'ACCEL 1 RMS', unit: 'g', d: 4 },
+      acc2: { name: 'Accelerometer2RMS', label: 'ACCEL 2 RMS', unit: 'g', d: 4 },
+      current: { name: 'Current', label: 'MOTOR CURRENT', unit: 'A', d: 3 },
+      voltage: { name: 'Voltage', label: 'VOLTAGE', unit: 'V', d: 1 },
+      pressure: { name: 'Pressure', label: 'PRESSURE', unit: 'bar', d: 3 },
+      flow: { name: 'Volume Flow RateRMS', label: 'FLOW RATE', unit: 'L/min', d: 2 },
+      temp: { name: 'Temperature', label: 'MOTOR TEMP', unit: '°C', d: 2 },
+      thermo: { name: 'Thermocouple', label: 'FLUID TEMP', unit: '°C', d: 2 },
+    },
+    sensorKeys: ['acc1', 'acc2', 'current', 'voltage', 'pressure', 'flow', 'temp', 'thermo'],
+    modeCodes: ['VIB', 'ELEC', 'FLOW', 'TEMP'],
+    modeNote: 'SKAB has no failure sub-types: the mode is the sensor group that drives the anomaly score (SHAP).',
+    ANCH: [[-1.2, 0.35, 0.45], [-1.2, -1.0, 0.6], [1.1, 1.75, 0.3], [2.0, -0.2, 0.62]],
+    target: [0.4, 0.1, 0], orbitR: 10.5, spinPos: [-1.2, 0, 0],
+    spinRate: () => Math.PI * 2 * 0.8,
+    heats(row, z) {
+      const m = (...ks) => Math.max(...ks.map((k) => Math.abs(z(k)) || 0));
+      const n = (v) => clamp01((v - 0.5) / 3.5);
+      return { amb: 0.1, motor: n(m('current', 'voltage')), pump: n(m('acc1', 'acc2')), valve: n(m('pressure', 'flow')), tank: n(m('temp', 'thermo')) };
+    },
+    hotspots: (c) => [[-1.2, 0.0, 0, 0.55, c.motor], [-1.2, -1.0, 0, 0.5, c.pump], [1.1, 1.4, 0, 0.45, c.valve], [2.0, -0.5, 0, 0.65, c.tank]],
+    parts: (row, h, fmt) => [
+      { key: 'motor', name: 'MOTOR', code: 'ELEC', side: 'left', sig: fmt('current', row.current) + ' A · ' + fmt('voltage', row.voltage) + ' V', heat: h.motor },
+      { key: 'pump', name: 'PUMP', code: 'VIB', side: 'left', sig: 'acc ' + fmt('acc1', row.acc1) + ' / ' + fmt('acc2', row.acc2) + ' g', heat: h.pump },
+      { key: 'valve', name: 'VALVE', code: 'FLOW', side: 'right', sig: fmt('flow', row.flow) + ' L/min · ' + fmt('pressure', row.pressure) + ' bar', heat: h.valve },
+      { key: 'tank', name: 'FLUID LOOP', code: 'TEMP', side: 'right', sig: fmt('thermo', row.thermo) + ' °C fluid · ' + fmt('temp', row.temp) + ' °C', heat: h.tank },
+    ],
+    badge: (row, fmt) => ({ value: fmt('flow', row.flow), unit: 'L/MIN' }),
+    build(add, THREE, spin) {
+      const H = Math.PI / 2;
+      add(new THREE.BoxGeometry(5.0, 0.2, 2.4, 12, 1, 6), 'frame', 0.4, -1.6, 0, null, 0, 20);
+      // vertical inline pump (VIB) with motor (ELEC) on top
+      add(new THREE.CylinderGeometry(0.55, 0.55, 0.6, 48, 4), 'pump', -1.2, -1.0, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.16, 0.16, 0.5, 24, 2), 'pump', -0.7, -1.0, 0, null, 0, 20, 0, H);
+      add(new THREE.CylinderGeometry(0.3, 0.42, 0.35, 48, 2), 'pump', -1.2, -0.55, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.45, 0.45, 1.0, 48, 10), 'motor', -1.2, 0.0, 0, null, 0, 20);
+      for (let i = 0; i < 6; i++) add(new THREE.TorusGeometry(0.48, 0.03, 6, 48), 'motor', -1.2, -0.35 + i * 0.14, 0, null, H, 0);
+      add(new THREE.CylinderGeometry(0.32, 0.45, 0.15, 48, 2), 'motor', -1.2, 0.575, 0, null, 0, 20);
+      // rotating cooling fan on the motor
+      add(new THREE.CylinderGeometry(0.12, 0.12, 0.12, 24, 1), 'motor', 0, 0.71, 0, spin, 0, 20);
+      for (let k = 0; k < 4; k++) add(new THREE.BoxGeometry(0.6, 0.03, 0.09, 4, 1, 1), 'motor', 0, 0.7, 0, spin, 0, 20, k * Math.PI / 4);
+      // pipe loop
+      add(new THREE.CylinderGeometry(0.12, 0.12, 0.65, 24, 2), 'frame', -0.125, -1.0, 0, null, 0, 20, 0, H);
+      add(new THREE.CylinderGeometry(0.12, 0.12, 2.4, 24, 8), 'frame', 0.2, 0.2, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.12, 0.12, 1.8, 24, 8), 'frame', 1.1, 1.4, 0, null, 0, 20, 0, H);
+      add(new THREE.CylinderGeometry(0.12, 0.12, 1.2, 24, 4), 'frame', 2.0, 0.8, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.08, 0.08, 3.2, 24, 10), 'frame', 0.4, -1.38, 0.5, null, 0, 20, 0, H);
+      // control valve (FLOW): body, flanges, stem, handwheel
+      add(new THREE.BoxGeometry(0.45, 0.5, 0.5, 4, 4, 4), 'valve', 1.1, 1.4, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.2, 0.2, 0.08, 32, 1), 'valve', 0.84, 1.4, 0, null, 0, 20, 0, H);
+      add(new THREE.CylinderGeometry(0.2, 0.2, 0.08, 32, 1), 'valve', 1.36, 1.4, 0, null, 0, 20, 0, H);
+      add(new THREE.CylinderGeometry(0.05, 0.05, 0.4, 16, 2), 'valve', 1.1, 1.85, 0, null, 0, 20);
+      add(new THREE.TorusGeometry(0.25, 0.035, 8, 40), 'valve', 1.1, 2.05, 0, null, H, 0);
+      // tank / fluid loop (TEMP)
+      add(new THREE.CylinderGeometry(0.6, 0.6, 1.4, 48, 10), 'tank', 2.0, -0.5, 0, null, 0, 20);
+      add(new THREE.CylinderGeometry(0.62, 0.62, 0.06, 48, 1), 'tank', 2.0, 0.22, 0, null, 0, 20);
+    },
+  },
+};
+
 
 class App extends Component {
   constructor(props) {
     super(props);
-    this.state = { t: 0, playing: true, speed: 1, filter: 'ALL', anchors: null, vw: 0, vh: 0, ready: false, glError: false };
+    this.state = { t: 0, playing: true, speed: (PROFILES[window.SF.profile] || PROFILES.ai4i).speeds[0], filter: 'ALL', anchors: null, vw: 0, vh: 0, ready: false, glError: false };
   }
 
   SEVC = { HIGH: '#EF4444', MED: '#F59E0B', NONE: '#10B981' };
-  TYPE_NAME = { HDF: 'Heat dissipation failure', PWF: 'Power failure', OSF: 'Overstrain failure', TWF: 'Tool wear failure' };
-  PART_OF = { HDF: 'housing', PWF: 'motor', OSF: 'spindle', TWF: 'tool' };
-  PART_NAME = { housing: 'spindle head', motor: 'motor', spindle: 'spindle', tool: 'cutting tool' };
-  DRIVERS = { HDF: ['delta', 'rpm', 'proc'], PWF: ['power', 'torque', 'rpm'], OSF: ['strain', 'torque', 'wear'], TWF: ['wear', 'strain'] };
-  F = {
-    air: { name: 'air_temp', label: 'AIR TEMP', unit: 'K', d: 1 },
-    proc: { name: 'process_temp', label: 'PROCESS TEMP', unit: 'K', d: 1 },
-    delta: { name: 'temp_delta', label: 'TEMP DELTA', unit: 'K', d: 2 },
-    rpm: { name: 'rpm', label: 'SPINDLE SPEED', unit: 'rpm', d: 0 },
-    torque: { name: 'torque', label: 'TORQUE', unit: 'Nm', d: 1 },
-    power: { name: 'power', label: 'POWER', unit: 'kW', d: 2, scale: 0.001 },
-    wear: { name: 'tool_wear', label: 'TOOL WEAR', unit: 'min', d: 0 },
-    strain: { name: 'torque×wear', label: 'STRAIN', unit: '', d: 0 },
-  };
+  get P() { return PROFILES[window.SF.profile] || PROFILES.ai4i; }
+  get TYPE_NAME() { return this.P.TYPE_NAME; }
+  get PART_OF() { return this.P.PART_OF; }
+  get PART_NAME() { return this.P.PART_NAME; }
+  get DRIVERS() { return this.P.DRIVERS; }
+  get F() { return this.P.F; }
+  get ANCH() { return this.P.ANCH; }
   RAMP = [[0, [0.17, 0.27, 0.55]], [0.3, [0.03, 0.57, 0.70]], [0.55, [0.98, 0.80, 0.08]], [0.78, [0.98, 0.45, 0.09]], [0.92, [0.86, 0.15, 0.15]], [1, [1, 0.92, 0.82]]];
-  ANCH = [[0, 2.95, 0.3], [0, 1.85, 0.55], [0, 0.7, 0.2], [0, -0.38, 0.05]];
 
   // ---------- real pipeline output (outputs/scored_data.csv, injected by dashboard/app.py) ----------
   data() {
@@ -89,16 +221,7 @@ class App extends Component {
       .sort((a, b) => Math.abs(b.z) - Math.abs(a.z)).slice(0, 2)
       .map((d) => this.F[d.k].name + ' ' + this.fmt(d.k, row[d.k]) + (this.F[d.k].unit ? ' ' + this.F[d.k].unit : '') + ' (' + (d.z >= 0 ? '+' : '') + d.z.toFixed(1) + 'σ)');
   }
-  heats(row) {
-    const n = (v, a, b) => Math.max(0, Math.min(1, (v - a) / (b - a)));
-    return {
-      amb: 0.1 + 0.22 * n(row.air, 297, 306),
-      housing: 0.5 * n(row.proc, 306, 314) + 0.55 * n(10.6 - row.delta, 0, 2.6),
-      motor: n(row.power, 5200, 13500),
-      spindle: 0.75 * n(row.strain, 1500, 11500) + 0.25 * n(row.rpm, 1350, 2100),
-      tool: n(row.wear, 20, 250),
-    };
-  }
+  heats(row) { return this.P.heats(row, (k) => this.z(k, row)); }
   ramp(h, out) {
     const R = this.RAMP;
     for (let i = 1; i < R.length; i++) {
@@ -170,36 +293,18 @@ class App extends Component {
 
     const spin = new THREE.Group(); scene.add(spin); this.spin = spin;
     const meshes = []; this.meshes = meshes;
-    const add = (geo, part, x, y, z, parent, rx, edgeAngle) => {
+    const add = (geo, part, x, y, z, parent, rx, edgeAngle, ry, rz) => {
       geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 3), 3));
       const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-      mesh.position.set(x, y, z); if (rx) mesh.rotation.x = rx;
+      mesh.position.set(x, y, z); if (rx) mesh.rotation.x = rx; if (ry) mesh.rotation.y = ry; if (rz) mesh.rotation.z = rz;
       (parent || scene).add(mesh);
       const em = new THREE.LineBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.25 });
       let lines = null;
       if (edgeAngle) { lines = new THREE.LineSegments(new THREE.EdgesGeometry(geo, edgeAngle), em); mesh.add(lines); }
       meshes.push({ mesh, part, lines, em });
     };
-    // frame: base, table, workpiece, column, ram
-    add(new THREE.BoxGeometry(4.2, 0.3, 3.0, 10, 2, 8), 'frame', 0, -1.45, -0.3, null, 0, 20);
-    add(new THREE.BoxGeometry(2.6, 0.2, 1.8, 8, 1, 6), 'frame', 0, -1.2, 0.2, null, 0, 20);
-    add(new THREE.BoxGeometry(1.2, 0.45, 0.9, 8, 3, 6), 'frame', 0, -0.875, 0.05, null, 0, 20);
-    add(new THREE.BoxGeometry(1.0, 4.8, 0.8, 4, 20, 4), 'frame', 0, 0.85, -1.35, null, 0, 20);
-    add(new THREE.BoxGeometry(0.7, 0.6, 0.9, 4, 4, 6), 'frame', 0, 1.85, -0.85, null, 0, 20);
-    // spindle head housing (HDF)
-    add(new THREE.BoxGeometry(1.3, 1.0, 1.1, 10, 8, 10), 'housing', 0, 1.8, 0, null, 0, 20);
-    add(new THREE.CylinderGeometry(0.36, 0.38, 0.22, 48, 2), 'housing', 0, 1.19, 0, null, 0, 20);
-    // motor (PWF) with cooling fins
-    add(new THREE.CylinderGeometry(0.5, 0.5, 0.95, 48, 14), 'motor', 0, 2.8, 0, null, 0, 20);
-    add(new THREE.CylinderGeometry(0.3, 0.42, 0.18, 48, 2), 'motor', 0, 3.365, 0, null, 0, 20);
-    for (let i = 0; i < 6; i++) add(new THREE.TorusGeometry(0.53, 0.032, 6, 48), 'motor', 0, 2.44 + i * 0.145, 0, null, Math.PI / 2, 0);
-    // rotating spindle (OSF) + holder + tool (TWF)
-    add(new THREE.CylinderGeometry(0.26, 0.26, 0.8, 48, 12), 'spindle', 0, 0.68, 0, spin, 0, 20);
-    add(new THREE.CylinderGeometry(0.24, 0.12, 0.3, 48, 4), 'spindle', 0, 0.13, 0, spin, 0, 20);
-    add(new THREE.CylinderGeometry(0.07, 0.06, 0.62, 24, 12), 'tool', 0, -0.31, 0, spin, 0, 20);
-    const pts = [];
-    for (let i = 0; i <= 160; i++) { const u = i / 160, a = u * Math.PI * 7; pts.push(new THREE.Vector3(Math.cos(a) * 0.07, -0.6 + u * 0.48, Math.sin(a) * 0.07)); }
-    add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 220, 0.022, 6, false), 'tool', 0, 0, 0, spin, 0, 0);
+    spin.position.set(...this.P.spinPos);
+    this.P.build(add, THREE, spin);
 
     scene.updateMatrixWorld(true);
     const v = new THREE.Vector3();
@@ -209,7 +314,7 @@ class App extends Component {
       m.wp = wp;
     });
 
-    this.orb = { th: 0.65, ph: 1.2, r: 10 };
+    this.orb = { th: 0.65, ph: 1.2, r: this.P.orbitR };
     const cv = this.canvasEl;
     cv.addEventListener('pointerdown', (e) => { this.drag = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing'; });
     cv.addEventListener('pointermove', (e) => {
@@ -245,22 +350,26 @@ class App extends Component {
       for (const key in tgt) cur[key] += (tgt[key] - cur[key]) * kk;
       const pulse = 0.5 + 0.5 * Math.sin(now * 0.0065);
 
-      spin.rotation.y += (row.rpm / 60) * Math.PI * 2 * dt * 0.06;
+      spin.rotation.y += this.P.spinRate(row) * dt;
       if ((this.props.autoRotate ?? true) && !this.drag) this.orb.th += dt * 0.12;
       const o = this.orb;
-      camera.position.set(o.r * Math.sin(o.ph) * Math.sin(o.th), 0.85 + o.r * Math.cos(o.ph), o.r * Math.sin(o.ph) * Math.cos(o.th));
-      camera.lookAt(0, 0.85, 0);
+      const tg = this.P.target;
+      camera.position.set(tg[0] + o.r * Math.sin(o.ph) * Math.sin(o.th), tg[1] + o.r * Math.cos(o.ph), tg[2] + o.r * Math.sin(o.ph) * Math.cos(o.th));
+      camera.lookAt(tg[0], tg[1], tg[2]);
 
-      const HS = [[2.8, 0.5, cur.motor], [1.8, 0.68, cur.housing], [0.68, 0.42, cur.spindle], [-0.42, 0.3, cur.tool], [-0.66, 0.33, cur.tool * 0.5]];
+      const HS = this.P.hotspots(cur), NH = HS.length;
       const wire = this.props.wireframe ?? true;
       meshes.forEach((m) => {
         const wp = m.wp, ca = m.mesh.geometry.attributes.color, c = ca.array;
         const tintAmber = sev === 'MED' && m.part === impl ? 0.18 + 0.22 * pulse : 0;
         const red = sev === 'HIGH' ? 0.68 + 0.2 * pulse : 0;
         for (let i = 0, n = wp.length; i < n; i += 3) {
-          const x = wp[i], y = wp[i + 1], zz = wp[i + 2], rr = x * x + zz * zz;
+          const x = wp[i], y = wp[i + 1], zz = wp[i + 2];
           let s = cur.amb;
-          for (let j = 0; j < 5; j++) { const dy = y - HS[j][0], sg = HS[j][1]; s += HS[j][2] * Math.exp(-(rr + dy * dy) / (2 * sg * sg)); }
+          for (let j = 0; j < NH; j++) {
+            const q = HS[j], dx = x - q[0], dy = y - q[1], dz = zz - q[2], sg = q[3];
+            s += q[4] * Math.exp(-(dx * dx + dy * dy + dz * dz) / (2 * sg * sg));
+          }
           const h = s > 1 ? 1 : s;
           this.ramp(h, col);
           if (tintAmber) { col[0] += (0.96 - col[0]) * tintAmber; col[1] += (0.62 - col[1]) * tintAmber; col[2] += (0.04 - col[2]) * tintAmber; }
@@ -302,7 +411,7 @@ class App extends Component {
     const all = this.alerts(hi, med);
 
     // sensors
-    const sensors = ['air', 'proc', 'delta', 'rpm', 'torque', 'power', 'wear'].map((k) => {
+    const sensors = this.P.sensorKeys.map((k) => {
       const z = this.z(k, row), az = Math.abs(z);
       const lo = S[k].lo, span = (S[k].hi - lo) || 1;
       let d = '';
@@ -320,12 +429,7 @@ class App extends Component {
 
     // callouts on the model
     const h = this.heats(row);
-    const PARTS = [
-      { key: 'motor', name: 'MOTOR', code: 'PWF', side: 'right', sig: this.fmt('power', row.power) + ' kW · ' + this.fmt('rpm', row.rpm) + ' rpm', heat: h.motor },
-      { key: 'housing', name: 'SPINDLE HEAD', code: 'HDF', side: 'left', sig: this.fmt('proc', row.proc) + ' K · Δ ' + this.fmt('delta', row.delta) + ' K', heat: Math.min(1, h.housing) },
-      { key: 'spindle', name: 'SPINDLE', code: 'OSF', side: 'right', sig: this.fmt('torque', row.torque) + ' Nm · strain ' + this.fmt('strain', row.strain), heat: Math.min(1, h.spindle) },
-      { key: 'tool', name: 'CUTTING TOOL', code: 'TWF', side: 'left', sig: 'wear ' + this.fmt('wear', row.wear) + ' min', heat: h.tool },
-    ];
+    const PARTS = this.P.parts(row, h, (k, v) => this.fmt(k, v));
     const A = this.state.anchors, vw = this.state.vw || 800, vh = this.state.vh || 660;
     const ev = this.evidence(row, ft);
     const tags = [];
@@ -368,10 +472,10 @@ class App extends Component {
       };
     }).filter((a) => filter === 'ALL' || a.sev === filter);
 
-    const modes = ['HDF', 'PWF', 'OSF', 'TWF'].map((code) => {
+    const modes = this.P.modeCodes.map((code) => {
       const active = ft === code;
       return {
-        code, name: this.TYPE_NAME[code].replace(' failure', ''), part: this.PART_NAME[this.PART_OF[code]],
+        code, name: this.TYPE_NAME[code].replace(/ (failure|anomaly)$/, ''), part: this.PART_NAME[this.PART_OF[code]],
         count: revealed.filter((a) => a.type === code).length,
         state: active ? sev : 'OK', color: active ? sc : '#10B981',
         border: active ? sc : '#21262D', bg: active ? (sev === 'HIGH' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.10)') : 'transparent',
@@ -417,13 +521,14 @@ class App extends Component {
       bannerText: (sev === 'HIGH' ? 'FAULT' : 'WARNING') + ' · ' + (ft ? this.TYPE_NAME[ft].toUpperCase() + ' · ' + this.PART_NAME[this.PART_OF[ft]].toUpperCase() : 'UNCLASSIFIED') + ' · p=' + row.prob.toFixed(2),
       loading: !this.state.ready,
       loadingText: this.state.glError ? 'WebGL unavailable: the 3D view could not start in this browser.' : 'Loading 3D model…',
-      rpmTxt: this.fmt('rpm', row.rpm),
+      badge: this.P.badge(row, (k, v) => this.fmt(k, v)),
+      subtitle: this.P.subtitle, trainedOn: this.P.trainedOn, gaugeTitle: this.P.gaugeTitle, modeNote: this.P.modeNote,
       filters: ['ALL', 'HIGH', 'MED'].map((f) => ({ label: f, pressed: filter === f, pick: pick('filter', f), bg: filter === f ? '#30363D' : 'transparent', fg: filter === f ? '#E6EDF3' : '#8B949E' })),
       feed, noAlerts: feed.length === 0, modes,
       playing: this.state.playing, paused: !this.state.playing,
       playLabel: this.state.playing ? 'Pause replay' : 'Play replay',
       togglePlay: () => this.setState({ playing: !this.state.playing }),
-      speeds: [1, 2, 4].map((s) => ({ label: s + '×', pressed: this.state.speed === s, pick: pick('speed', s), bg: this.state.speed === s ? '#06B6D4' : '#0D1117', fg: this.state.speed === s ? '#0D1117' : '#C9D1D9' })),
+      speeds: this.P.speeds.map((s) => ({ label: s + '×', pressed: this.state.speed === s, pick: pick('speed', s), bg: this.state.speed === s ? '#06B6D4' : '#0D1117', fg: this.state.speed === s ? '#0D1117' : '#C9D1D9' })),
       nextFault: () => {
         const nx = all.find((a) => a.start > t + 1) || all[0];
         if (nx) this.setState({ t: Math.max(0, nx.start - 18), playing: true });
@@ -449,7 +554,7 @@ class App extends Component {
 <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#06B6D4" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path><circle cx="12" cy="12" r="6.6"></circle></svg>
 <div>
 <div class="sf-mono" style="font-size: 18px; font-weight: 700; letter-spacing: 0.16em; color: #E6EDF3">SENSAFLOW</div>
-<div style="font-size: 12px; color: #8B949E">Industrial fault detection · CNC spindle thermal twin</div>
+<div style="font-size: 12px; color: #8B949E">${v.subtitle}</div>
 </div>
 </div>
 <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
@@ -462,14 +567,14 @@ class App extends Component {
 <span><b style="color: #E6EDF3">${v.alertCount}</b> alerts (<b style="color: #EF4444">${v.highCount}</b> HIGH) across <b style="color: #E6EDF3">${v.tShown}</b> / ${v.N} timesteps</span>
 <span>Model: ${v.model}</span>
 <span>F1: ${v.f1}</span>
-<span>Trained on: AI4I 2020</span>
+<span>${v.trainedOn}</span>
 </div>
 
 <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch">
 
 <section aria-label="Sensor readings" style="flex: 1 1 270px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
 <div style="background: #161B22; border: 1px solid #21262D; padding: 14px 14px 10px">
-<h2 class="sf-mono" style="margin: 0 0 4px; font-size: 11px; letter-spacing: 0.14em; color: #8B949E; font-weight: 500">FAULT PROBABILITY</h2>
+<h2 class="sf-mono" style="margin: 0 0 4px; font-size: 11px; letter-spacing: 0.14em; color: #8B949E; font-weight: 500">${v.gaugeTitle}</h2>
 <svg viewBox="0 0 200 118" style="width: 100%; max-width: 250px; display: block; margin: 0 auto" role="img" aria-label=${'Fault probability gauge, ' + v.probPct}>
 <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#21262D" stroke-width="14"></path>
 <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke=${v.gaugeColor} stroke-width="14" stroke-dasharray=${v.gaugeDash}></path>
@@ -502,7 +607,7 @@ ${v.sensors.map((s) => html`
 <section aria-label="3D thermal model" style="flex: 999 1 560px; min-width: 0">
 <div style=${`position: relative; height: 660px; background: #0A0E13; border: 1px solid ${v.vpBorder}; overflow: hidden`}>
 <div style="position: absolute; inset: 0; background-image: linear-gradient(#141A22 1px, transparent 1px), linear-gradient(90deg, #141A22 1px, transparent 1px); background-size: 40px 40px"></div>
-<canvas ref=${v.setCanvas} role="img" aria-label="3D model of the CNC spindle coloured by heat. Drag to orbit, scroll to zoom." style="position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab"></canvas>
+<canvas ref=${v.setCanvas} role="img" aria-label="3D model of the equipment coloured by heat. Drag to orbit, scroll to zoom." style="position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab"></canvas>
 <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none" aria-hidden="true">
 <path d=${v.leadCool} fill="none" stroke="#6E7681" stroke-width="1"></path>
 <path d=${v.leadHot} fill="none" stroke=${v.leadHotColor} stroke-width="1.5"></path>
@@ -539,7 +644,7 @@ ${v.loading && html`
 <div class="sf-mono" style="position: absolute; left: 12px; bottom: 10px; font-size: 10px; color: #6E7681; pointer-events: none">DRAG TO ORBIT · SCROLL TO ZOOM</div>
 <div class="sf-mono" style="position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(13,17,23,0.85); border: 1px solid #21262D; pointer-events: none">
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06B6D4" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 3v6h-6"></path></svg>
-<span style="font-size: 13px; color: #E6EDF3; font-weight: 500">${v.rpmTxt}</span><span style="font-size: 10px; color: #8B949E">RPM</span>
+<span style="font-size: 13px; color: #E6EDF3; font-weight: 500">${v.badge.value}</span><span style="font-size: 10px; color: #8B949E">${v.badge.unit}</span>
 </div>
 </div>
 </section>
@@ -578,7 +683,7 @@ ${v.modes.map((m) => html`
 <span class="sf-mono" style="font-size: 10px; color: #8B949E">${m.count}×</span>
 <span class="sf-mono" style=${`font-size: 10px; font-weight: 700; color: ${m.color}; width: 34px; text-align: right`}>${m.state}</span>
 </div>`)}
-<div style="font-size: 11px; color: #8B949E; margin-top: 4px">RNF (random failure) has no part signature and is not localised on the model.</div>
+<div style="font-size: 11px; color: #8B949E; margin-top: 4px">${v.modeNote}</div>
 </div>
 </section>
 </div>

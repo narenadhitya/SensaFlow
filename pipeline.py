@@ -1,9 +1,11 @@
 """SensaFlow — industrial fault detection pipeline.
 
 Usage:
-    python pipeline.py                                   # train on AI4I, evaluate on held-out 20% split
+    python pipeline.py                                   # train on AI4I, evaluate on held-out 20% split -> outputs/
     python pipeline.py --train data/train.csv --test data/test.csv
-    python pipeline.py --predict data/unseen.csv         # inference only, using saved model + config
+    python pipeline.py --skab                            # SKAB valve1/valve2/other with IsolationForest -> outputs/skab_*/
+    python pipeline.py --predict data/unseen.csv         # score a new file -> outputs/custom/
+                                                         # (AI4I-style sensors: saved model; SKAB-style: IsolationForest)
 """
 import argparse
 import json
@@ -13,7 +15,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.metrics import (average_precision_score, confusion_matrix, f1_score,
                              precision_recall_curve, precision_score, recall_score)
 from sklearn.model_selection import train_test_split
@@ -22,6 +24,7 @@ from xgboost import XGBClassifier
 ROOT = Path(__file__).parent
 MODEL_DIR = ROOT / "models"
 OUT_DIR = ROOT / "outputs"
+CUSTOM_DIR = OUT_DIR / "custom"          # --predict results (dashboard: "Other")
 CONFIG_PATH = ROOT / "feature_config.json"
 MODEL_PATH = MODEL_DIR / "model.pkl"
 DEFAULT_DATA = ROOT / "datasets" / "ai4i2020.csv"
@@ -88,11 +91,14 @@ def sensor_coverage(df: pd.DataFrame, log: list) -> list[str]:
     return found
 
 
-def write_run_info(mode: str, path, df: pd.DataFrame, has_labels: bool, sensors: list[str], warnings: list[str]):
-    """Describe what outputs/ currently contains (read by the dashboard)."""
-    info = {"mode": mode, "input": Path(path).name, "rows": int(len(df)), "id_column": df.attrs.get("id_source"),
-            "has_labels": bool(has_labels), "sensors_found": sensors, "warnings": warnings}
-    (OUT_DIR / "run_info.json").write_text(json.dumps(info, indent=2))
+def write_run_info(mode: str, path, df: pd.DataFrame, has_labels: bool, sensors: list[str], warnings: list[str],
+                   out_dir: Path = OUT_DIR, profile: str = "ai4i", model: str | None = None):
+    """Describe what an output folder contains (read by the dashboard)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    info = {"mode": mode, "profile": profile, "model": model, "input": Path(path).name, "rows": int(len(df)),
+            "id_column": df.attrs.get("id_source"), "has_labels": bool(has_labels), "sensors_found": sensors,
+            "warnings": warnings}
+    (out_dir / "run_info.json").write_text(json.dumps(info, indent=2))
 
 
 # ----------------------------------------------------------- feature building
@@ -392,10 +398,10 @@ def predict_frame(df: pd.DataFrame, model, config: dict, log: list, explain_floo
     return out, X, alerts, detail
 
 
-def write_outputs(df, preds, X, alerts, detail, label=None):
-    OUT_DIR.mkdir(exist_ok=True)
-    preds.to_csv(OUT_DIR / "predictions.csv", index=False)
-    alerts.to_csv(OUT_DIR / "fault_alerts_evidence.csv", index=False)
+def write_outputs(df, preds, X, alerts, detail, label=None, out_dir: Path = OUT_DIR):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    preds.to_csv(out_dir / "predictions.csv", index=False)
+    alerts.to_csv(out_dir / "fault_alerts_evidence.csv", index=False)
     # Richer table for the dashboard: sensors + derived features + predictions (+ ground truth)
     raw = pd.DataFrame({c: pd.to_numeric(df[c], errors="coerce") if c in df else np.nan
                         for c in RAW_SENSORS if c not in X}, index=df.index)
@@ -403,7 +409,7 @@ def write_outputs(df, preds, X, alerts, detail, label=None):
                         detail.reset_index(drop=True)], axis=1)
     if label is not None:
         scored["actual_label"] = np.asarray(label)
-    scored.to_csv(OUT_DIR / "scored_data.csv", index=False)
+    scored.to_csv(out_dir / "scored_data.csv", index=False)
 
 
 # ----------------------------------------------------------------- robustness
@@ -466,6 +472,191 @@ def run_robustness(model, config: dict, df_te: pd.DataFrame, y_te) -> tuple[list
     return lines, results
 
 
+# ------------------------------------------------------------------------ SKAB
+# SKAB (Skoltech Anomaly Benchmark): water-circulation testbed, 1 Hz, 8 sensors, ';'-separated, real datetimes,
+# an `anomaly` label per row. Different sensor domain from AI4I, so it uses its own unsupervised method:
+# each experiment file is its own stream; an IsolationForest is fitted on that stream's first 400 rows (normal
+# start-up, the standard SKAB protocol) and scores the rest. Labels are used only for evaluation.
+
+SKAB_DIR = ROOT / "datasets" / "SKAB"
+SKAB_GROUPS = ["valve1", "valve2", "other"]
+SKAB_SENSORS = {   # canonical key -> SKAB column
+    "acc1": "Accelerometer1RMS", "acc2": "Accelerometer2RMS", "current": "Current", "pressure": "Pressure",
+    "temp": "Temperature", "thermo": "Thermocouple", "voltage": "Voltage", "flow": "Volume Flow RateRMS",
+}
+SKAB_UNITS = {"acc1": " g", "acc2": " g", "current": " A", "pressure": " bar", "temp": " °C", "thermo": " °C",
+              "voltage": " V", "flow": " L/min"}
+SKAB_GROUP_OF = {"acc1": "VIB", "acc2": "VIB", "current": "ELEC", "voltage": "ELEC",
+                 "pressure": "FLOW", "flow": "FLOW", "temp": "TEMP", "thermo": "TEMP"}
+SKAB_MODE_NAME = {"VIB": "Pump vibration anomaly (VIB)", "ELEC": "Motor electrical anomaly (ELEC)",
+                  "FLOW": "Valve / flow anomaly (FLOW)", "TEMP": "Thermal anomaly (TEMP)"}
+# Chosen on valve1 only (window 0/10/30 s x percentile 95/99); valve2 and other are held out.
+SKAB_CONFIG = {"baseline_rows": 400, "window": 10, "threshold_percentile": 95, "n_estimators": 200}
+
+
+def skab_columns(columns) -> dict:
+    """Map a file's columns to SKAB canonical keys (case/units-insensitive)."""
+    wanted = {normalise(v): k for k, v in SKAB_SENSORS.items()}
+    return {c: wanted[normalise(c)] for c in columns if normalise(c) in wanted}
+
+
+def is_skab_format(path) -> bool:
+    head = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig", nrows=5)
+    return len(skab_columns(head.columns)) >= 4
+
+
+def load_skab_file(path) -> pd.DataFrame:
+    df = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig")
+    df = df.rename(columns=skab_columns(df.columns))
+    time_col = next((c for c in df.columns if normalise(c) in ("datetime", "timestamp", "time")), None)
+    if time_col:
+        df["datetime"] = pd.to_datetime(df[time_col], errors="coerce")
+        df = df.sort_values("datetime", kind="stable")
+    label_col = next((c for c in df.columns if normalise(c) in ("anomaly", "label", "fault")), None)
+    df["label"] = pd.to_numeric(df[label_col], errors="coerce").fillna(0).astype(int) if label_col else np.nan
+    return df.reset_index(drop=True)
+
+
+def skab_features(df: pd.DataFrame, sensors: list[str], n_base: int, window: int) -> pd.DataFrame:
+    """Sensor levels standardised against the stream's own baseline + rolling mean/std (trend, instability)."""
+    X = df[sensors].apply(pd.to_numeric, errors="coerce").ffill().bfill()
+    base = X.iloc[:n_base]
+    Z = (X - base.mean()) / base.std().replace(0, 1).fillna(1)
+    return pd.concat([Z,
+                      Z.rolling(window, min_periods=1).mean().add_suffix("__mean"),
+                      Z.rolling(window, min_periods=2).std().fillna(0).add_suffix("__std")], axis=1)
+
+
+def score_skab_stream(df: pd.DataFrame, cfg: dict = SKAB_CONFIG) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame]:
+    """Fit on the stream's baseline, score every row, explain rows near/above threshold. Returns (scored, shap, F)."""
+    sensors = [k for k in SKAB_SENSORS if k in df]
+    n_base = min(cfg["baseline_rows"], max(len(df) // 3, 30))
+    F = skab_features(df, sensors, n_base, cfg["window"])
+    model = IsolationForest(n_estimators=cfg["n_estimators"], random_state=SEED, n_jobs=-1).fit(F.iloc[:n_base])
+    score = -model.score_samples(F)                         # higher = more anomalous
+    base_score = score[:n_base]
+    thr = float(np.percentile(base_score, cfg["threshold_percentile"]))
+    scale = float(base_score.std()) or 1e-6
+    prob = 1 / (1 + np.exp(-(score - thr) / scale))          # 0.5 at the decision threshold
+    pred = (score > thr).astype(int)
+
+    out = pd.DataFrame({
+        "timestamp": df["datetime"].astype(str) if "datetime" in df else np.arange(len(df)),
+        "predicted_label": pred, "fault_probability": prob.round(4),
+        "alert_severity": severity(prob, 0.5), "evidence_summary": "",
+        "anomaly_score": score.round(4),
+    })
+    for k in sensors:
+        out[k] = pd.to_numeric(df[k], errors="coerce").values
+    out["likely_fault_type"], out["driver_1"], out["driver_2"] = "", "", ""
+
+    sv_all = np.zeros(F.shape)
+    idx = np.flatnonzero(prob >= DASHBOARD_EXPLAIN_FLOOR)
+    if len(idx):
+        import shap
+        sv = shap.TreeExplainer(model).shap_values(F.iloc[idx])
+        sv_all[idx] = sv
+        push = pd.DataFrame(-sv, columns=F.columns)          # positive = pushes towards anomaly
+        per_sensor = pd.DataFrame({k: push[[k, f"{k}__mean", f"{k}__std"]].sum(axis=1) for k in sensors})
+        for row, i in enumerate(idx):
+            ranked = per_sensor.iloc[row].sort_values(ascending=False)
+            drivers = []
+            for k in ranked.index[:2]:
+                if ranked[k] <= 0:
+                    continue
+                parts = push.iloc[row][[k, f"{k}__mean", f"{k}__std"]]
+                z = F.iat[i, F.columns.get_loc(k)]
+                tag = " · unstable" if parts.idxmax().endswith("__std") else ""
+                drivers.append(f"{SKAB_SENSORS[k]} = {out.at[i, k]:.4g}{SKAB_UNITS[k]} ({z:+.1f}σ vs baseline{tag})")
+            groups = per_sensor.iloc[row].clip(lower=0).groupby(SKAB_GROUP_OF).sum()
+            out.at[i, "likely_fault_type"] = SKAB_MODE_NAME[groups.idxmax()] if groups.max() > 0 else "Unclassified"
+            out.at[i, "driver_1"], out.at[i, "driver_2"] = (drivers + ["", ""])[:2]
+        flagged = pred[idx] == 1
+        out.loc[idx[flagged], "evidence_summary"] = [
+            "; ".join(x for x in (out.at[i, "driver_1"], out.at[i, "driver_2"]) if x) for i in idx[flagged]]
+    if df["label"].notna().all():
+        out["actual_label"] = df["label"].astype(int).values
+    return out, sv_all, F
+
+
+def run_skab_files(files: list[Path], out_dir: Path, name: str, note: str = ""):
+    """Score one or more SKAB-format streams and write the standard output set to out_dir."""
+    frames, shap_rows, shap_cols = [], [], None
+    per_file = []
+    for f in files:
+        df = load_skab_file(f)
+        scored, sv, F = score_skab_stream(df)
+        scored.insert(1, "experiment", f.stem)
+        frames.append(scored)
+        explained = np.flatnonzero(np.abs(sv).sum(axis=1) > 0)
+        if len(explained):
+            rng = np.random.default_rng(SEED)
+            pick = rng.choice(explained, size=min(150, len(explained)), replace=False)
+            shap_rows.append(pd.DataFrame(sv[pick], columns=F.columns))
+        if "actual_label" in scored:
+            y, p = scored["actual_label"], scored["predicted_label"]
+            per_file.append((f.stem, len(scored), f1_score(y, p, zero_division=0), y.mean()))
+    allx = pd.concat(frames, ignore_index=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in ("robustness.csv", "robustness_report.txt", "metrics.json"):
+        (out_dir / stale).unlink(missing_ok=True)
+
+    pred_cols = ["timestamp", "predicted_label", "fault_probability", "alert_severity", "evidence_summary"]
+    allx[pred_cols].to_csv(out_dir / "predictions.csv", index=False)
+    allx.to_csv(out_dir / "scored_data.csv", index=False)
+    flagged = allx[allx["predicted_label"] == 1]
+    alerts = flagged[["timestamp", "experiment", "alert_severity", "fault_probability", "likely_fault_type",
+                      "driver_1", "driver_2", "evidence_summary"]].rename(
+        columns={"fault_probability": "confidence", "evidence_summary": "evidence"})
+    alerts = alerts.sort_values("confidence", ascending=False).reset_index(drop=True)
+    alerts.insert(0, "alert_id", np.arange(1, len(alerts) + 1))
+    alerts.to_csv(out_dir / "fault_alerts_evidence.csv", index=False)
+
+    if shap_rows:   # global importance, aggregated per sensor
+        sv = pd.concat(shap_rows, ignore_index=True).abs().mean()
+        imp = pd.DataFrame([{"feature": SKAB_SENSORS[k],
+                             "mean_abs_shap": float(sum(sv.get(c, 0) for c in (k, f"{k}__mean", f"{k}__std"))),
+                             "category": SKAB_GROUP_OF[k]} for k in SKAB_SENSORS if k in sv.index])
+        imp.sort_values("mean_abs_shap", ascending=False).to_csv(out_dir / "shap_importance.csv", index=False)
+
+    cfg = SKAB_CONFIG
+    lines = ["SENSAFLOW — SKAB EVALUATION REPORT", "=" * 34, f"Data: {name} ({len(files)} file(s), {len(allx)} rows at 1 Hz)",
+             f"Method: IsolationForest ({cfg['n_estimators']} trees) fitted per stream on its first "
+             f"{cfg['baseline_rows']} rows (normal start-up);", f"        features = baseline-standardised sensors + "
+             f"{cfg['window']} s rolling mean/std; threshold = {cfg['threshold_percentile']}th percentile of baseline scores.",
+             "Labels are never used for fitting — only for the evaluation below."]
+    if note:
+        lines.append(note)
+    has_labels = "actual_label" in allx and allx["actual_label"].notna().all()
+    if has_labels:
+        text, m = metrics_block(allx["actual_label"].astype(int), allx["predicted_label"], allx["fault_probability"])
+        (out_dir / "metrics.json").write_text(json.dumps({"model": "IsolationForest", **m}, indent=2))
+        lines += ["", "POINT-WISE RESULTS (all rows)", "-" * 34, text, "PER EXPERIMENT", "-" * 34]
+        lines += [f"{n:<12} rows={r:<5} anomaly rate={a:5.1%}  F1={f:.3f}" for n, r, f, a in per_file]
+        print(f"{name}: F1={m['f1_fault']:.3f}  precision={m['precision']:.3f}  recall={m['recall']:.3f}  "
+              f"({len(files)} file{'s' if len(files) != 1 else ''}) -> {out_dir}")
+    else:
+        print(f"{name}: {len(allx)} rows scored, {int(allx['predicted_label'].sum())} anomalous -> {out_dir}")
+    (out_dir / "evaluation_metrics.txt").write_text("\n".join(lines), encoding="utf-8")
+
+    allx.attrs["id_source"] = "datetime"
+    write_run_info("skab", name, allx, has_labels, [SKAB_SENSORS[k] for k in SKAB_SENSORS if k in allx],
+                   [], out_dir=out_dir, profile="skab", model="IsolationForest")
+
+
+def run_skab(groups=SKAB_GROUPS):
+    def key(p):
+        return (0, int(p.stem)) if p.stem.isdigit() else (1, p.stem)
+    for g in groups:
+        files = sorted((SKAB_DIR / g).glob("*.csv"), key=key)
+        if not files:
+            print(f"SKAB group '{g}' not found under {SKAB_DIR}")
+            continue
+        note = "Tuning: window/percentile chosen on valve1 — treat valve1 as in-sample." if g == "valve1" else \
+               "Held-out group: no settings were tuned on it."
+        run_skab_files(files, OUT_DIR / f"skab_{g}", f"SKAB {g}", note)
+
+
 # ---------------------------------------------------------------------- modes
 
 def run_train(train_path, test_path=None):
@@ -518,7 +709,8 @@ def run_train(train_path, test_path=None):
     write_outputs(df_te, preds, X_te, alerts, detail, y_te)
     df_te.attrs["id_source"] = df_te.attrs.get("id_source") or df.attrs.get("id_source")
     write_run_info("train" if not test_path else "train+test",
-                   test_path or f"{Path(train_path).name} (held-out 20% test split)", df_te, y_te is not None, sensors, warnings)
+                   test_path or f"{Path(train_path).name} (held-out 20% test split)", df_te, y_te is not None, sensors,
+                   warnings, model=best_name)
     save_global_explanations(best["model"], X_te)
 
     lines = [
@@ -556,6 +748,13 @@ def run_train(train_path, test_path=None):
 
 
 def run_predict(path):
+    """Score a new file into outputs/custom/. SKAB-style sensor files use the IsolationForest method."""
+    out_dir = CUSTOM_DIR
+    for stale in out_dir.glob("*") if out_dir.exists() else []:
+        stale.unlink()
+    if is_skab_format(path):
+        print("Detected SKAB-style sensors -> unsupervised IsolationForest (per-file baseline).")
+        return run_skab_files([Path(path)], out_dir, Path(path).name)
     if not MODEL_PATH.exists():
         raise SystemExit("No trained model found — run `python pipeline.py` first.")
     model, config = joblib.load(MODEL_PATH), json.loads(CONFIG_PATH.read_text())
@@ -565,12 +764,12 @@ def run_predict(path):
     sensors = sensor_coverage(df, warnings)
     preds, X, alerts, detail = predict_frame(df, model, config, log, explain_floor=DASHBOARD_EXPLAIN_FLOOR)
     has_labels = "label" in df
-    write_outputs(df, preds, X, alerts, detail, df["label"] if has_labels else None)
-    write_run_info("predict", path, df, has_labels, sensors, warnings)
+    write_outputs(df, preds, X, alerts, detail, df["label"] if has_labels else None, out_dir=out_dir)
+    write_run_info("predict", path, df, has_labels, sensors, warnings, out_dir=out_dir, model=config["model"])
     for l in log:
         print("[align]", l)
-    print(f"{len(preds)} rows scored, {int(preds['predicted_label'].sum())} faults -> {OUT_DIR / 'predictions.csv'}")
-    metrics_path = OUT_DIR / "metrics.json"
+    print(f"{len(preds)} rows scored, {int(preds['predicted_label'].sum())} faults -> {out_dir / 'predictions.csv'}")
+    metrics_path = out_dir / "metrics.json"
     if has_labels:     # metrics now describe this file, not the training test split
         text, m = metrics_block(df["label"].astype(int), preds["predicted_label"], preds["fault_probability"])
         metrics_path.write_text(json.dumps({"model": config["model"], **m}, indent=2))
@@ -586,10 +785,13 @@ def main():
     ap = argparse.ArgumentParser(description="SensaFlow fault detection pipeline")
     ap.add_argument("--train", default=str(DEFAULT_DATA), help="labelled training CSV")
     ap.add_argument("--test", help="optional separate test CSV (labels optional)")
-    ap.add_argument("--predict", help="score a CSV with the saved model (no training)")
+    ap.add_argument("--predict", help="score a new CSV (no training) -> outputs/custom/")
+    ap.add_argument("--skab", action="store_true", help="run the SKAB benchmark (valve1, valve2, other) -> outputs/skab_*/")
     args = ap.parse_args()
     if args.predict:
         run_predict(args.predict)
+    elif args.skab:
+        run_skab()
     else:
         run_train(args.train, args.test)
 

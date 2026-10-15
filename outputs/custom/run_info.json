@@ -1,0 +1,17 @@
+{
+  "mode": "predict",
+  "profile": "ai4i",
+  "model": "RandomForest",
+  "input": "new_machine_demo.csv",
+  "rows": 800,
+  "id_column": "timestamp",
+  "has_labels": true,
+  "sensors_found": [
+    "air_temp",
+    "process_temp",
+    "rpm",
+    "torque",
+    "tool_wear"
+  ],
+  "warnings": []
+}

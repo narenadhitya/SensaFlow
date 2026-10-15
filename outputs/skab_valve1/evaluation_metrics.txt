@@ -1,0 +1,39 @@
+SENSAFLOW — SKAB EVALUATION REPORT
+==================================
+Data: SKAB valve1 (16 file(s), 18162 rows at 1 Hz)
+Method: IsolationForest (200 trees) fitted per stream on its first 400 rows (normal start-up);
+        features = baseline-standardised sensors + 10 s rolling mean/std; threshold = 95th percentile of baseline scores.
+Labels are never used for fitting — only for the evaluation below.
+Tuning: window/percentile chosen on valve1 — treat valve1 as in-sample.
+
+POINT-WISE RESULTS (all rows)
+----------------------------------
+F1 Score (fault):   0.647
+F1 Score (macro):   0.719
+Precision (fault):  0.606
+Recall (fault):     0.695
+AUC-PR:             0.633
+
+Confusion Matrix:
+               Predicted Normal  Predicted Fault
+Actual Normal              9005             2848
+Actual Fault               1927             4382
+
+PER EXPERIMENT
+----------------------------------
+0            rows=1148  anomaly rate=34.9%  F1=0.589
+1            rows=1145  anomaly rate=35.1%  F1=0.514
+2            rows=1075  anomaly rate=31.3%  F1=0.592
+3            rows=1149  anomaly rate=35.2%  F1=0.254
+4            rows=1095  anomaly rate=31.9%  F1=0.629
+5            rows=1154  anomaly rate=34.9%  F1=0.675
+6            rows=1154  anomaly rate=35.1%  F1=0.317
+7            rows=1094  anomaly rate=37.0%  F1=0.723
+8            rows=1144  anomaly rate=35.0%  F1=0.740
+9            rows=1148  anomaly rate=35.0%  F1=0.696
+10           rows=1146  anomaly rate=35.0%  F1=0.706
+11           rows=1141  anomaly rate=35.0%  F1=0.585
+12           rows=1140  anomaly rate=35.0%  F1=0.715
+13           rows=1140  anomaly rate=35.0%  F1=0.805
+14           rows=1139  anomaly rate=35.0%  F1=0.806
+15           rows=1150  anomaly rate=35.1%  F1=0.605
