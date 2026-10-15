@@ -214,7 +214,8 @@ def run_streamlit():
     import streamlit.components.v1 as components
 
     st.set_page_config(page_title="SensaFlow", page_icon="⚙", layout="wide")
-    st.markdown("<style>.block-container{padding-top:3.5rem;padding-bottom:1rem;max-width:100%}</style>",
+    st.markdown("<style>.block-container{padding:3.5rem 1.25rem 1rem;max-width:100%}"
+                "section[data-testid='stSidebar'][data-collapsed='false']{width:360px !important;min-width:360px}</style>",
                 unsafe_allow_html=True)
 
     # ?dataset=<slug> selects a dataset, and the URL follows the sidebar so every view is linkable
@@ -228,6 +229,7 @@ def run_streamlit():
         # fixed key and no `index`: a changing default would make Streamlit recreate the widget and drop clicks
         name = st.radio("Dataset", names, key="dataset", label_visibility="collapsed",
                         format_func=lambda n: n if available(DATASETS[n]) else f"{n} (not generated)")
+        analyst_box = st.container()   # filled last, so answering never delays the twin
     if st.query_params.get("dataset") != slugs[name]:
         st.query_params["dataset"] = slugs[name]
     out_dir = DATASETS[name]
@@ -240,22 +242,73 @@ def run_streamlit():
 
     d = default_props(out_dir)
     with st.sidebar:
-        st.markdown("### SEVERITY")
-        med = st.slider("Medium threshold", 0.2, 0.79, d["medThreshold"], 0.01, key=f"med_{name}",
-                        help=f"Default = the model's decision threshold ({d['medThreshold']})")
-        hi = st.slider("High threshold", 0.5, 0.99, d["highThreshold"], 0.01, key=f"hi_{name}")
-        st.markdown("### 3D VIEW")
-        auto = st.toggle("Auto-rotate", d["autoRotate"])
-        callouts = st.toggle("Show callouts", d["showCallouts"])
-        wire = st.toggle("Wireframe edges", d["wireframe"])
-        st.markdown("### PANELS")
-        evidence = st.toggle("Show model evidence", True)
+        st.markdown("### SETTINGS")
+        with st.expander("Severity thresholds"):
+            med = st.slider("Medium threshold", 0.2, 0.79, d["medThreshold"], 0.01, key=f"med_{name}",
+                            help=f"Default = the model's decision threshold ({d['medThreshold']})")
+            hi = st.slider("High threshold", 0.5, 0.99, d["highThreshold"], 0.01, key=f"hi_{name}")
+        with st.expander("3D view & panels"):
+            auto = st.toggle("Auto-rotate", d["autoRotate"])
+            callouts = st.toggle("Show callouts", d["showCallouts"])
+            wire = st.toggle("Wireframe edges", d["wireframe"])
+            evidence = st.toggle("Show model evidence", True)
 
     props = {"autoRotate": auto, "showCallouts": callouts, "wireframe": wire, "medThreshold": med, "highThreshold": hi}
     # components.html (not st.iframe): verified to start the WebGL view inside Streamlit 1.66
     components.html(build_html(props, out_dir), height=1100, scrolling=True)
     if evidence:
         model_evidence(st, out_dir)
+    with analyst_box:
+        analyst_panel(st, name, slugs[name], out_dir)
+
+
+def analyst_panel(st, name: str, slug: str, out_dir: Path):
+    """Sidebar chat: plain-language answers about the selected run (dashboard/assistant.py)."""
+    import assistant
+
+    st.markdown("### AI ANALYST")
+    key_ok = assistant.api_key() is not None
+    st.caption(("Grounded in this run's outputs · free model via OpenRouter" if key_ok else
+                "Offline mode — built-in summaries. Add OPENROUTER_API_KEY to .env for chat answers.")
+               + " · it can't see the live replay cursor: mention the time or UDI on the clock.")
+
+    stamp = (out_dir / "scored_data.csv").stat().st_mtime
+    cache = st.session_state.setdefault("analyst_runs", {})
+    if cache.get(slug, (None,))[0] != stamp:
+        cache[slug] = (stamp, assistant.load_run(out_dir))
+    run = cache[slug][1]
+    chats = st.session_state.setdefault("analyst_chats", {})
+    history = chats.setdefault(slug, [])
+
+    question = None
+    cols = st.columns(2)
+    for i, (label, prompt) in enumerate(assistant.QUICK_QUESTIONS.items()):
+        if cols[i % 2].button(label, key=f"q_{slug}_{i}", width="stretch"):
+            question = prompt
+    typed = st.chat_input("Ask about this run…", key=f"chat_{slug}")
+    question = typed or question
+
+    if not (history or question):
+        return
+    with st.container(height=420):
+        for msg in history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("model"):
+                    st.caption(msg["model"])
+        if question:
+            with st.chat_message("user"):
+                st.markdown(question)
+            with st.chat_message("assistant"):
+                with st.spinner("Analysing this run…"):
+                    answer, model = assistant.ask(run, history, question, name)
+                st.markdown(answer)
+                st.caption(model)
+            history += [{"role": "user", "content": question},
+                        {"role": "assistant", "content": answer, "model": model}]
+    if history and st.button("Clear chat", key=f"clear_{slug}"):
+        history.clear()
+        st.rerun()
 
 
 def running_in_streamlit() -> bool:

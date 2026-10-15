@@ -42,6 +42,23 @@ alert to inspect it, drag the 3D model to orbit / scroll to zoom. The sidebar se
 No Python handy? Open `outputs/dashboard.html` in a browser (standalone, offline, AI4I). Export any dataset with
 `python dashboard/app.py --dataset skab_valve2 --export skab.html` (`ai4i`, `skab_valve1`, `skab_valve2`, `skab_other`, `custom`).
 
+## AI analyst (sidebar chat)
+
+The **AI ANALYST** section of the sidebar explains the selected run in plain language. Use the quick buttons
+(**Summary · Top alert · Drivers · Reliability**) or type a question, e.g. *"What happened at UDI 4343?"* or
+*"What's going on around 16:44?"*.
+
+- **Setup:** copy `.env.example` to `.env` and add a free OpenRouter key (https://openrouter.ai/keys). `.env` is
+  git-ignored, so never commit a key. Default model chain: `nvidia/nemotron-3-super-120b-a12b:free`, then `openrouter/free`
+  (override with `OPENROUTER_MODEL`).
+- **Grounded:** each question is answered from a compact briefing of the selected dataset's outputs (metrics, alert
+  episodes, failure modes, SHAP drivers, misses, per-run scores, robustness) plus exact readings for any UDI/timestamp
+  mentioned. The model is told to use only that data.
+- **Works without a key:** with no key or no network, it answers with a built-in summary computed from the same data.
+- It can't see the live replay cursor. To ask about a moment, give the time or UDI shown on the dashboard clock.
+- Code: `dashboard/assistant.py`. Free models answer in roughly 5–30 s and can be rate-limited; it then tries the
+  next model.
+
 ## What the replay shows
 
 - **AI4I** has no timestamps: its 10,000 rows are independent simulated snapshots. The dashboard replays the 2,000
