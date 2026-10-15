@@ -30,6 +30,7 @@ SEED = 42
 RAW_SENSORS = ["air_temp", "process_temp", "rpm", "torque", "tool_wear"]
 TYPE_MAP = {"L": 0, "M": 1, "H": 2}
 ABSENT_SENSOR_FILL = "native"   # how to treat a sensor missing entirely at inference: "mean" or "native"
+DASHBOARD_EXPLAIN_FLOOR = 0.2  # explain rows down to this probability so the dashboard threshold slider has evidence
 DROP_FEATURES: list[str] = ["air_temp", "process_temp", "temp_rpm_ratio"]  # absolute temps are shift-sensitive; deltas carry the physics
 
 # Canonical name -> accepted aliases (after normalisation: lowercase, units stripped, non-alnum -> "_")
@@ -304,7 +305,12 @@ def metrics_block(y, pred, proba) -> tuple[str, dict]:
     return text, m
 
 
-def predict_frame(df: pd.DataFrame, model, config: dict, log: list) -> pd.DataFrame:
+def predict_frame(df: pd.DataFrame, model, config: dict, log: list, explain_floor: float | None = None):
+    """Score rows. Returns (predictions, features, alerts, detail).
+
+    SHAP explanations are computed for predicted faults and, if explain_floor is given, for every row
+    with fault_probability >= explain_floor (used by the dashboard, whose alert threshold is adjustable).
+    """
     X = build_features(df, config, log)
     proba = model.predict_proba(X)[:, 1]
     pred = (proba >= config["threshold"]).astype(int)
@@ -317,12 +323,21 @@ def predict_frame(df: pd.DataFrame, model, config: dict, log: list) -> pd.DataFr
     })
     out["evidence_summary"] = ""
 
-    # SHAP evidence for every predicted fault
+    # SHAP evidence for every predicted fault (+ lower-probability rows for the dashboard)
+    floor = config["threshold"] if explain_floor is None else min(explain_floor, config["threshold"])
+    detail = pd.DataFrame({"likely_fault_type": "", "driver_1": "", "driver_2": ""}, index=out.index)
     alerts = pd.DataFrame()
+    exp_idx = np.flatnonzero(proba >= floor)
+    expl_by_row = {}
+    if len(exp_idx):
+        Xe = X.iloc[exp_idx]
+        for i, e in zip(exp_idx, explain_alerts(Xe, shap_values(model, Xe), config["normal_ranges"])):
+            expl_by_row[i] = e
+            d = [x["text"] for x in e["drivers"]] + ["", ""]
+            detail.iloc[i] = [e["fault_type"], d[0], d[1]]
     idx = np.flatnonzero(pred)
     if len(idx):
-        Xf = X.iloc[idx]
-        expl = explain_alerts(Xf, shap_values(model, Xf), config["normal_ranges"])
+        expl = [expl_by_row[i] for i in idx]
         out.loc[out.index[idx], "evidence_summary"] = [e["summary"] for e in expl]
         rows = []
         for i, e in zip(idx, expl):
@@ -345,15 +360,18 @@ def predict_frame(df: pd.DataFrame, model, config: dict, log: list) -> pd.DataFr
                   .sort_values(["alert_severity", "confidence"], key=lambda s: s.map(sev_rank) if s.name == "alert_severity" else -s)
                   .reset_index(drop=True))
         alerts.insert(0, "alert_id", np.arange(1, len(alerts) + 1))
-    return out, X, alerts
+    return out, X, alerts, detail
 
 
-def write_outputs(df, preds, X, alerts, label=None):
+def write_outputs(df, preds, X, alerts, detail, label=None):
     OUT_DIR.mkdir(exist_ok=True)
     preds.to_csv(OUT_DIR / "predictions.csv", index=False)
     alerts.to_csv(OUT_DIR / "fault_alerts_evidence.csv", index=False)
     # Richer table for the dashboard: sensors + derived features + predictions (+ ground truth)
-    scored = pd.concat([preds.reset_index(drop=True), X.reset_index(drop=True)], axis=1)
+    raw = pd.DataFrame({c: pd.to_numeric(df[c], errors="coerce") if c in df else np.nan
+                        for c in RAW_SENSORS if c not in X}, index=df.index)
+    scored = pd.concat([preds.reset_index(drop=True), raw.reset_index(drop=True), X.reset_index(drop=True),
+                        detail.reset_index(drop=True)], axis=1)
     if label is not None:
         scored["actual_label"] = np.asarray(label)
     scored.to_csv(OUT_DIR / "scored_data.csv", index=False)
@@ -465,8 +483,8 @@ def run_train(train_path, test_path=None):
     CONFIG_PATH.write_text(json.dumps(config, indent=2))
 
     log = []
-    preds, X_te, alerts = predict_frame(df_te, best["model"], config, log)
-    write_outputs(df_te, preds, X_te, alerts, y_te)
+    preds, X_te, alerts, detail = predict_frame(df_te, best["model"], config, log, explain_floor=DASHBOARD_EXPLAIN_FLOOR)
+    write_outputs(df_te, preds, X_te, alerts, detail, y_te)
     save_global_explanations(best["model"], X_te)
 
     lines = [
@@ -509,8 +527,8 @@ def run_predict(path):
     model, config = joblib.load(MODEL_PATH), json.loads(CONFIG_PATH.read_text())
     df = load_csv(path)
     log = []
-    preds, X, alerts = predict_frame(df, model, config, log)
-    write_outputs(df, preds, X, alerts, df["label"] if "label" in df else None)
+    preds, X, alerts, detail = predict_frame(df, model, config, log, explain_floor=DASHBOARD_EXPLAIN_FLOOR)
+    write_outputs(df, preds, X, alerts, detail, df["label"] if "label" in df else None)
     for l in log:
         print("[align]", l)
     print(f"{len(preds)} rows scored, {int(preds['predicted_label'].sum())} faults -> {OUT_DIR / 'predictions.csv'}")

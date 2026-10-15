@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MachinaSense dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0D1117}
+a{color:#06B6D4}a:hover{color:#67E8F9}
+.ms-mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+.ms-btn:hover{background:#21262D !important}
+.ms-btn:focus-visible,.ms-range:focus-visible{outline:2px solid #06B6D4;outline-offset:2px}
+@keyframes msAlarm{0%,100%{box-shadow:inset 0 0 0 2px #EF4444,inset 0 0 50px rgba(239,68,68,.30)}50%{box-shadow:inset 0 0 0 3px #EF4444,inset 0 0 140px rgba(239,68,68,.55)}}
+.ms-alarm{animation:msAlarm 1.1s ease-in-out infinite}
+@keyframes msBlink{50%{opacity:.3}}
+.ms-blink{animation:msBlink 1s steps(2) infinite}
+.ms-range{-webkit-appearance:none;appearance:none;width:100%;height:28px;background:transparent;margin:4px 0 0}
+.ms-range::-webkit-slider-runnable-track{height:4px;background:#30363D}
+.ms-range::-moz-range-track{height:4px;background:#30363D}
+.ms-range::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:22px;margin-top:-9px;background:#E6EDF3;border:2px solid #0D1117}
+.ms-range::-moz-range-thumb{width:12px;height:20px;background:#E6EDF3;border:2px solid #0D1117;border-radius:0}
+.ms-scroll{scrollbar-width:thin;scrollbar-color:#30363D transparent}
+@media (prefers-reduced-motion: reduce){.ms-alarm,.ms-blink{animation:none}}
+</style>
+<script>/*__THREE__*/</script>
+<script>/*__PREACT__*/</script>
+<script>window.MS = /*__DATA__*/null;</script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { html, render, Component } = htmPreact;
+
+class App extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { t: 0, playing: true, speed: 1, filter: 'ALL', anchors: null, vw: 0, vh: 0, ready: false, glError: false };
+  }
+
+  SEVC = { HIGH: '#EF4444', MED: '#F59E0B', NONE: '#10B981' };
+  TYPE_NAME = { HDF: 'Heat dissipation failure', PWF: 'Power failure', OSF: 'Overstrain failure', TWF: 'Tool wear failure' };
+  PART_OF = { HDF: 'housing', PWF: 'motor', OSF: 'spindle', TWF: 'tool' };
+  PART_NAME = { housing: 'spindle head', motor: 'motor', spindle: 'spindle', tool: 'cutting tool' };
+  DRIVERS = { HDF: ['delta', 'rpm', 'proc'], PWF: ['power', 'torque', 'rpm'], OSF: ['strain', 'torque', 'wear'], TWF: ['wear', 'strain'] };
+  F = {
+    air: { name: 'air_temp', label: 'AIR TEMP', unit: 'K', d: 1 },
+    proc: { name: 'process_temp', label: 'PROCESS TEMP', unit: 'K', d: 1 },
+    delta: { name: 'temp_delta', label: 'TEMP DELTA', unit: 'K', d: 2 },
+    rpm: { name: 'rpm', label: 'SPINDLE SPEED', unit: 'rpm', d: 0 },
+    torque: { name: 'torque', label: 'TORQUE', unit: 'Nm', d: 1 },
+    power: { name: 'power', label: 'POWER', unit: 'kW', d: 2, scale: 0.001 },
+    wear: { name: 'tool_wear', label: 'TOOL WEAR', unit: 'min', d: 0 },
+    strain: { name: 'torque×wear', label: 'STRAIN', unit: '', d: 0 },
+  };
+  RAMP = [[0, [0.17, 0.27, 0.55]], [0.3, [0.03, 0.57, 0.70]], [0.55, [0.98, 0.80, 0.08]], [0.78, [0.98, 0.45, 0.09]], [0.92, [0.86, 0.15, 0.15]], [1, [1, 0.92, 0.82]]];
+  ANCH = [[0, 2.95, 0.3], [0, 1.85, 0.55], [0, 0.7, 0.2], [0, -0.38, 0.05]];
+
+  // ---------- real pipeline output (outputs/scored_data.csv, injected by dashboard/app.py) ----------
+  data() {
+    if (this._data) return this._data;
+    const cols = window.MS.columns;
+    const rows = window.MS.rows.map((r, t) => {
+      const o = { t };
+      cols.forEach((c, j) => { o[c] = r[j]; });
+      return o;
+    });
+    const S = {};
+    Object.keys(this.F).forEach((key) => {
+      const norm = rows.filter((x) => x.prob < 0.3).map((x) => x[key]);
+      const m = norm.reduce((a, b) => a + b, 0) / norm.length;
+      const s = Math.sqrt(norm.reduce((a, b) => a + (b - m) * (b - m), 0) / norm.length) || 1;
+      const all = rows.map((x) => x[key]);
+      S[key] = { m, s, lo: Math.min(...all), hi: Math.max(...all) };
+    });
+    this._stats = S;
+    this._data = rows;
+    return rows;
+  }
+
+  z(key, row) { const s = this._stats[key]; return (row[key] - s.m) / s.s; }
+  fmt(key, v) { const f = this.F[key]; return (v * (f.scale || 1)).toFixed(f.d); }
+  sevOf(p, hi, med) { return p >= hi ? 'HIGH' : p >= med ? 'MED' : 'NONE'; }
+  tm(i) { return 'UDI ' + this.data()[i].uid; }
+  evidence(row, type) {
+    if (row.ev1) return [row.ev1, row.ev2].filter(Boolean);   // SHAP drivers from the pipeline
+    if (!type) return [];
+    return this.DRIVERS[type].map((k) => ({ k, z: this.z(k, row) }))
+      .sort((a, b) => Math.abs(b.z) - Math.abs(a.z)).slice(0, 2)
+      .map((d) => this.F[d.k].name + ' ' + this.fmt(d.k, row[d.k]) + (this.F[d.k].unit ? ' ' + this.F[d.k].unit : '') + ' (' + (d.z >= 0 ? '+' : '') + d.z.toFixed(1) + 'σ)');
+  }
+  heats(row) {
+    const n = (v, a, b) => Math.max(0, Math.min(1, (v - a) / (b - a)));
+    return {
+      amb: 0.1 + 0.22 * n(row.air, 297, 306),
+      housing: 0.5 * n(row.proc, 306, 314) + 0.55 * n(10.6 - row.delta, 0, 2.6),
+      motor: n(row.power, 5200, 13500),
+      spindle: 0.75 * n(row.strain, 1500, 11500) + 0.25 * n(row.rpm, 1350, 2100),
+      tool: n(row.wear, 20, 250),
+    };
+  }
+  ramp(h, out) {
+    const R = this.RAMP;
+    for (let i = 1; i < R.length; i++) {
+      if (h <= R[i][0]) {
+        const a = R[i - 1], b = R[i], u = (h - a[0]) / (b[0] - a[0]);
+        out[0] = a[1][0] + (b[1][0] - a[1][0]) * u; out[1] = a[1][1] + (b[1][1] - a[1][1]) * u; out[2] = a[1][2] + (b[1][2] - a[1][2]) * u;
+        return out;
+      }
+    }
+    out[0] = 1; out[1] = 0.92; out[2] = 0.82; return out;
+  }
+  hex(h) { const c = this.ramp(Math.max(0, Math.min(1, h)), [0, 0, 0]); return '#' + c.map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join(''); }
+  alerts(hi, med) {
+    const key = hi + '|' + med;
+    if (this._ak === key) return this._al;
+    const out = []; let cur = null;
+    this.data().forEach((r, i) => {
+      if (r.prob >= med) {
+        if (!cur) cur = { start: i, end: i, peak: r.prob, peakT: i, type: r.type };
+        cur.end = i;
+        if (r.prob > cur.peak) { cur.peak = r.prob; cur.peakT = i; if (r.type) cur.type = r.type; }
+      } else if (cur) { out.push(cur); cur = null; }
+    });
+    if (cur) out.push(cur);
+    out.forEach((a) => { a.sev = a.peak >= hi ? 'HIGH' : 'MED'; });
+    this._ak = key; this._al = out;
+    return out;
+  }
+  thresholds() {
+    const hi = this.props.highThreshold ?? 0.8;
+    return { hi, med: Math.min(this.props.medThreshold ?? 0.5, hi - 0.01) };
+  }
+
+  // ---------- lifecycle ----------
+  componentDidMount() {
+    const { hi, med } = this.thresholds();
+    const first = this.alerts(hi, med)[0];
+    if (first) this.setState({ t: Math.max(0, first.start - 18) });
+    this.timer = setInterval(() => {
+      if (!this.state.playing) return;
+      this.setState({ t: (this.state.t + this.state.speed) % this.data().length });
+    }, 140);
+    this.tryInit();
+  }
+  componentWillUnmount() {
+    this.dead = true;
+    clearInterval(this.timer); clearTimeout(this._wait); cancelAnimationFrame(this.raf);
+    if (this.ro) this.ro.disconnect();
+    if (this.renderer) this.renderer.dispose();
+  }
+
+  tryInit() {
+    if (this.renderer || !this.canvasEl || this.dead) return;
+    const THREE = window.THREE;
+    if (!THREE) { this._tries = (this._tries || 0) + 1; if (this._tries > 50) { this.setState({ glError: true }); return; } this._wait = setTimeout(() => this.tryInit(), 200); return; }
+    let renderer;
+    try { renderer = new THREE.WebGLRenderer({ canvas: this.canvasEl, antialias: true, alpha: true }); }
+    catch (e) { this.setState({ glError: true }); return; }
+    this.renderer = renderer;
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setClearColor(0x000000, 0);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
+    this.camera = camera;
+    scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+    const d1 = new THREE.DirectionalLight(0xffffff, 0.7); d1.position.set(4, 6, 5); scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0x9fdcff, 0.3); d2.position.set(-5, 2, -4); scene.add(d2);
+    const grid = new THREE.GridHelper(12, 24, 0x2a3442, 0x182029); grid.position.y = -1.61; scene.add(grid);
+
+    const spin = new THREE.Group(); scene.add(spin); this.spin = spin;
+    const meshes = []; this.meshes = meshes;
+    const add = (geo, part, x, y, z, parent, rx, edgeAngle) => {
+      geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 3), 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+      mesh.position.set(x, y, z); if (rx) mesh.rotation.x = rx;
+      (parent || scene).add(mesh);
+      const em = new THREE.LineBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.25 });
+      let lines = null;
+      if (edgeAngle) { lines = new THREE.LineSegments(new THREE.EdgesGeometry(geo, edgeAngle), em); mesh.add(lines); }
+      meshes.push({ mesh, part, lines, em });
+    };
+    // frame: base, table, workpiece, column, ram
+    add(new THREE.BoxGeometry(4.2, 0.3, 3.0, 10, 2, 8), 'frame', 0, -1.45, -0.3, null, 0, 20);
+    add(new THREE.BoxGeometry(2.6, 0.2, 1.8, 8, 1, 6), 'frame', 0, -1.2, 0.2, null, 0, 20);
+    add(new THREE.BoxGeometry(1.2, 0.45, 0.9, 8, 3, 6), 'frame', 0, -0.875, 0.05, null, 0, 20);
+    add(new THREE.BoxGeometry(1.0, 4.8, 0.8, 4, 20, 4), 'frame', 0, 0.85, -1.35, null, 0, 20);
+    add(new THREE.BoxGeometry(0.7, 0.6, 0.9, 4, 4, 6), 'frame', 0, 1.85, -0.85, null, 0, 20);
+    // spindle head housing (HDF)
+    add(new THREE.BoxGeometry(1.3, 1.0, 1.1, 10, 8, 10), 'housing', 0, 1.8, 0, null, 0, 20);
+    add(new THREE.CylinderGeometry(0.36, 0.38, 0.22, 48, 2), 'housing', 0, 1.19, 0, null, 0, 20);
+    // motor (PWF) with cooling fins
+    add(new THREE.CylinderGeometry(0.5, 0.5, 0.95, 48, 14), 'motor', 0, 2.8, 0, null, 0, 20);
+    add(new THREE.CylinderGeometry(0.3, 0.42, 0.18, 48, 2), 'motor', 0, 3.365, 0, null, 0, 20);
+    for (let i = 0; i < 6; i++) add(new THREE.TorusGeometry(0.53, 0.032, 6, 48), 'motor', 0, 2.44 + i * 0.145, 0, null, Math.PI / 2, 0);
+    // rotating spindle (OSF) + holder + tool (TWF)
+    add(new THREE.CylinderGeometry(0.26, 0.26, 0.8, 48, 12), 'spindle', 0, 0.68, 0, spin, 0, 20);
+    add(new THREE.CylinderGeometry(0.24, 0.12, 0.3, 48, 4), 'spindle', 0, 0.13, 0, spin, 0, 20);
+    add(new THREE.CylinderGeometry(0.07, 0.06, 0.62, 24, 12), 'tool', 0, -0.31, 0, spin, 0, 20);
+    const pts = [];
+    for (let i = 0; i <= 160; i++) { const u = i / 160, a = u * Math.PI * 7; pts.push(new THREE.Vector3(Math.cos(a) * 0.07, -0.6 + u * 0.48, Math.sin(a) * 0.07)); }
+    add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 220, 0.022, 6, false), 'tool', 0, 0, 0, spin, 0, 0);
+
+    scene.updateMatrixWorld(true);
+    const v = new THREE.Vector3();
+    meshes.forEach((m) => {
+      const p = m.mesh.geometry.attributes.position, wp = new Float32Array(p.count * 3);
+      for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i).applyMatrix4(m.mesh.matrixWorld); wp[i * 3] = v.x; wp[i * 3 + 1] = v.y; wp[i * 3 + 2] = v.z; }
+      m.wp = wp;
+    });
+
+    this.orb = { th: 0.65, ph: 1.2, r: 10 };
+    const cv = this.canvasEl;
+    cv.addEventListener('pointerdown', (e) => { this.drag = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing'; });
+    cv.addEventListener('pointermove', (e) => {
+      if (!this.drag) return;
+      this.orb.th -= (e.clientX - this.drag.x) * 0.008;
+      this.orb.ph = Math.max(0.35, Math.min(1.52, this.orb.ph - (e.clientY - this.drag.y) * 0.008));
+      this.drag = { x: e.clientX, y: e.clientY };
+    });
+    const end = () => { this.drag = null; cv.style.cursor = 'grab'; };
+    cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+    cv.addEventListener('wheel', (e) => { e.preventDefault(); this.orb.r = Math.max(6, Math.min(16, this.orb.r * (e.deltaY > 0 ? 1.08 : 0.93))); }, { passive: false });
+
+    const resize = () => {
+      const el = cv.parentElement; if (!el) return;
+      const w = el.clientWidth, h = el.clientHeight; if (!w || !h) return;
+      this.vw = w; this.vh = h;
+      renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+      this._tagKey = null;
+    };
+    this.ro = new ResizeObserver(resize); this.ro.observe(cv.parentElement); resize();
+
+    this.cur = this.heats(this.data()[this.state.t]);
+    const col = [0, 0, 0], pv = new THREE.Vector3();
+    const loop = (now) => {
+      if (this.dead) return;
+      this.raf = requestAnimationFrame(loop);
+      const dt = Math.min(0.05, (now - (this._last || now)) / 1000); this._last = now;
+      const row = this.data()[this.state.t];
+      const { hi, med } = this.thresholds();
+      const sev = this.sevOf(row.prob, hi, med);
+      const impl = sev !== 'NONE' && row.type ? this.PART_OF[row.type] : null;
+      const tgt = this.heats(row), cur = this.cur, kk = Math.min(1, dt * 5);
+      for (const key in tgt) cur[key] += (tgt[key] - cur[key]) * kk;
+      const pulse = 0.5 + 0.5 * Math.sin(now * 0.0065);
+
+      spin.rotation.y += (row.rpm / 60) * Math.PI * 2 * dt * 0.06;
+      if ((this.props.autoRotate ?? true) && !this.drag) this.orb.th += dt * 0.12;
+      const o = this.orb;
+      camera.position.set(o.r * Math.sin(o.ph) * Math.sin(o.th), 0.85 + o.r * Math.cos(o.ph), o.r * Math.sin(o.ph) * Math.cos(o.th));
+      camera.lookAt(0, 0.85, 0);
+
+      const HS = [[2.8, 0.5, cur.motor], [1.8, 0.68, cur.housing], [0.68, 0.42, cur.spindle], [-0.42, 0.3, cur.tool], [-0.66, 0.33, cur.tool * 0.5]];
+      const wire = this.props.wireframe ?? true;
+      meshes.forEach((m) => {
+        const wp = m.wp, ca = m.mesh.geometry.attributes.color, c = ca.array;
+        const tintAmber = sev === 'MED' && m.part === impl ? 0.18 + 0.22 * pulse : 0;
+        const red = sev === 'HIGH' ? 0.68 + 0.2 * pulse : 0;
+        for (let i = 0, n = wp.length; i < n; i += 3) {
+          const x = wp[i], y = wp[i + 1], zz = wp[i + 2], rr = x * x + zz * zz;
+          let s = cur.amb;
+          for (let j = 0; j < 5; j++) { const dy = y - HS[j][0], sg = HS[j][1]; s += HS[j][2] * Math.exp(-(rr + dy * dy) / (2 * sg * sg)); }
+          const h = s > 1 ? 1 : s;
+          this.ramp(h, col);
+          if (tintAmber) { col[0] += (0.96 - col[0]) * tintAmber; col[1] += (0.62 - col[1]) * tintAmber; col[2] += (0.04 - col[2]) * tintAmber; }
+          if (red) { const b = 0.5 + 0.5 * h; col[0] += (0.98 * b - col[0]) * red; col[1] += (0.12 * b - col[1]) * red; col[2] += (0.1 * b - col[2]) * red; }
+          c[i] = col[0]; c[i + 1] = col[1]; c[i + 2] = col[2];
+        }
+        ca.needsUpdate = true;
+        m.mesh.material.emissive.setRGB(sev === 'HIGH' ? 0.18 * pulse : 0, 0, 0);
+        if (m.lines) {
+          let hexc = 0x06b6d4, op = 0.22;
+          if (sev === 'HIGH') { hexc = 0xff5a52; op = m.part === impl ? 0.55 + 0.45 * pulse : 0.5; }
+          else if (sev === 'MED' && m.part === impl) { hexc = 0xf59e0b; op = 0.45 + 0.5 * pulse; }
+          m.em.color.setHex(hexc); m.em.opacity = op;
+          m.lines.visible = wire || (sev !== 'NONE' && (sev === 'HIGH' || m.part === impl));
+        }
+      });
+      renderer.render(scene, camera);
+
+      if (this.vw && now - (this._tagT || 0) > 70) {
+        this._tagT = now;
+        const pos = this.ANCH.map((a) => { pv.set(a[0], a[1], a[2]).project(camera); return { x: (pv.x + 1) / 2 * this.vw, y: (1 - pv.y) / 2 * this.vh }; });
+        const key = pos.map((p) => Math.round(p.x) + ',' + Math.round(p.y)).join('|') + '|' + this.vw + 'x' + this.vh;
+        if (key !== this._tagKey) { this._tagKey = key; this.setState({ anchors: pos, vw: this.vw, vh: this.vh, ready: true }); }
+      }
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  // ---------- view model ----------
+  renderVals() {
+    if (!this._setCanvas) this._setCanvas = (el) => { if (el && el !== this.canvasEl) { this.canvasEl = el; this.tryInit(); } };
+    const D = this.data(), S = this._stats, N = D.length, META = window.MS.meta;
+    const { hi, med } = this.thresholds();
+    const t = Math.max(0, Math.min(N - 1, this.state.t | 0));
+    const row = D[t];
+    const sev = this.sevOf(row.prob, hi, med);
+    const ft = sev !== 'NONE' ? row.type : null;
+    const sc = this.SEVC[sev];
+    const all = this.alerts(hi, med);
+
+    // sensors
+    const sensors = ['air', 'proc', 'delta', 'rpm', 'torque', 'power', 'wear'].map((k) => {
+      const z = this.z(k, row), az = Math.abs(z);
+      const lo = S[k].lo, span = (S[k].hi - lo) || 1;
+      let d = '';
+      for (let i = Math.max(0, t - 59), j = 0; i <= t; i++, j++) {
+        const x = (j / 59) * 92, y = 26 - ((D[i][k] - lo) / span) * 24;
+        d += (j ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+      }
+      const zc = az >= 3 ? '#EF4444' : az >= 2 ? '#F59E0B' : '#8B949E';
+      return { label: this.F[k].label, val: this.fmt(k, row[k]), unit: this.F[k].unit, zTxt: (z >= 0 ? '+' : '') + z.toFixed(1) + 'σ', zColor: zc, spark: d, stroke: az >= 2 ? zc : '#06B6D4' };
+    });
+
+    // gauge
+    const tick = (p) => { const a = Math.PI - Math.PI * p, c = Math.cos(a), s = Math.sin(a); return { x1: 100 + 66 * c, y1: 100 - 66 * s, x2: 100 + 93 * c, y2: 100 - 93 * s }; };
+    const L = Math.PI * 80;
+
+    // callouts on the model
+    const h = this.heats(row);
+    const PARTS = [
+      { key: 'motor', name: 'MOTOR', code: 'PWF', side: 'right', sig: this.fmt('power', row.power) + ' kW · ' + this.fmt('rpm', row.rpm) + ' rpm', heat: h.motor },
+      { key: 'housing', name: 'SPINDLE HEAD', code: 'HDF', side: 'left', sig: this.fmt('proc', row.proc) + ' K · Δ ' + this.fmt('delta', row.delta) + ' K', heat: Math.min(1, h.housing) },
+      { key: 'spindle', name: 'SPINDLE', code: 'OSF', side: 'right', sig: this.fmt('torque', row.torque) + ' Nm · strain ' + this.fmt('strain', row.strain), heat: Math.min(1, h.spindle) },
+      { key: 'tool', name: 'CUTTING TOOL', code: 'TWF', side: 'left', sig: 'wear ' + this.fmt('wear', row.wear) + ' min', heat: h.tool },
+    ];
+    const A = this.state.anchors, vw = this.state.vw || 800, vh = this.state.vh || 660;
+    const ev = this.evidence(row, ft);
+    const tags = [];
+    let leadCool = '', leadHot = '';
+    if (A && (this.props.showCallouts ?? true)) {
+      PARTS.forEach((p, i) => {
+        const a = A[i]; if (!a) return;
+        const W = 184, hot = !!ft && this.PART_OF[ft] === p.key;
+        let lx = p.side === 'left' ? a.x - W - 64 : a.x + 64;
+        lx = Math.max(8, Math.min(vw - W - 8, lx));
+        const ly = Math.max(56, Math.min(vh - (hot ? 140 : 84), a.y - 26));
+        const x2 = p.side === 'left' ? lx + W : lx, y2 = ly + 14;
+        const seg = 'M' + a.x.toFixed(1) + ' ' + a.y.toFixed(1) + 'L' + x2.toFixed(1) + ' ' + y2.toFixed(1);
+        if (hot) leadHot += seg; else leadCool += seg;
+        tags.push({
+          dx: a.x - 4.5, dy: a.y - 4.5, lx, ly, name: p.name, code: p.code, sig: p.sig,
+          heatPct: Math.round(p.heat * 100), heatHex: this.hex(p.heat),
+          hot, border: hot ? sc : '#30363D', codeColor: hot ? sc : '#6E7681',
+          sevLine: sev + ' · p=' + row.prob.toFixed(2), ev1: ev[0] || '', ev2: ev[1] || '',
+        });
+      });
+    }
+
+    // alert feed (only what the replay has reached)
+    const filter = this.state.filter;
+    const revealed = all.filter((a) => a.start <= t);
+    const feed = revealed.slice().reverse().map((a) => {
+      let peak = a.peak, pt = a.peakT;
+      if (a.end > t) { peak = 0; for (let i = a.start; i <= t; i++) if (D[i].prob > peak) { peak = D[i].prob; pt = i; } }
+      const s = peak >= hi ? 'HIGH' : 'MED';
+      const live = t >= a.start && t <= a.end;
+      const e = this.evidence(D[pt], a.type);
+      const truth = D[pt].actual === 1 ? '  ✓ confirmed' : D[pt].actual === 0 ? '  ✗ false alarm' : '';
+      return {
+        sev: s, color: this.SEVC[s], time: a.end > a.start ? this.tm(a.start) + '–' + D[Math.min(a.end, t)].uid : this.tm(a.start), conf: (peak * 100).toFixed(1) + '%',
+        typeName: this.TYPE_NAME[a.type] || 'Unclassified', live: live ? '  ● ACTIVE' : '', truth, ev: e[0] || '',
+        bg: live ? (s === 'HIGH' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.10)') : '#0D1117',
+        border: live ? this.SEVC[s] : '#21262D',
+        pick: () => this.setState({ t: pt, playing: false }),
+      };
+    }).filter((a) => filter === 'ALL' || a.sev === filter);
+
+    const modes = ['HDF', 'PWF', 'OSF', 'TWF'].map((code) => {
+      const active = ft === code;
+      return {
+        code, name: this.TYPE_NAME[code].replace(' failure', ''), part: this.PART_NAME[this.PART_OF[code]],
+        count: revealed.filter((a) => a.type === code).length,
+        state: active ? sev : 'OK', color: active ? sc : '#10B981',
+        border: active ? sc : '#21262D', bg: active ? (sev === 'HIGH' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.10)') : 'transparent',
+      };
+    });
+
+    // timeline
+    const X = (i) => (i / (N - 1)) * 1000, Y = (p) => 116 - p * 110;
+    if (!this._probLine) {
+      let d = '';
+      D.forEach((r, i) => { d += (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(r.prob).toFixed(1); });
+      this._probLine = d; this._probArea = d + 'L1000 120L0 120Z';
+    }
+    let zoneHigh = '', zoneMed = '';
+    all.forEach((a) => {
+      const x0 = X(a.start), x1 = Math.max(X(a.end + 1), x0 + 2);   // keep single-row alerts visible
+      const z = 'M' + x0.toFixed(1) + ' 0H' + x1.toFixed(1) + 'V120H' + x0.toFixed(1) + 'Z';
+      if (a.sev === 'HIGH') zoneHigh += z; else zoneMed += z;
+    });
+    const axis = [0, 0.25, 0.5, 0.75, 1].map((f) => 'UDI ' + D[Math.round(f * (N - 1))].uid);
+
+    const pick = (k, v) => () => this.setState({ [k]: v });
+    return {
+      setCanvas: this._setCanvas,
+      clock: this.tm(t),
+      statusLabel: sev === 'HIGH' ? 'FAULT' : sev === 'MED' ? 'WARNING' : 'NORMAL',
+      statusColor: sc, statusBlink: sev === 'HIGH' ? 'ms-blink' : '',
+      sevLabel: sev === 'NONE' ? 'NO ALERT' : sev + ' SEVERITY',
+      alertCount: revealed.length, highCount: revealed.filter((a) => a.sev === 'HIGH').length,
+      tShown: t + 1, N,
+      model: META.model, f1: META.f1, source: META.source,
+      probPct: (row.prob * 100).toFixed(1) + '%',
+      gaugeColor: sev === 'NONE' ? '#06B6D4' : sc,
+      gaugeDash: (row.prob * L).toFixed(1) + ' ' + L.toFixed(1),
+      medTick: tick(med), hiTick: tick(hi), medTxt: med.toFixed(2), hiTxt: hi.toFixed(2),
+      sensors,
+      vpBorder: sev === 'NONE' ? '#21262D' : sc,
+      vpGlow: sev === 'MED' ? 'inset 0 0 0 2px #F59E0B, inset 0 0 60px rgba(245,158,11,0.18)' : 'none',
+      alarmClass: sev === 'HIGH' ? 'ms-alarm' : '',
+      tags, leadCool, leadHot, leadHotColor: sc,
+      hasBanner: sev !== 'NONE',
+      bannerBg: sc,
+      bannerText: (sev === 'HIGH' ? 'FAULT' : 'WARNING') + ' · ' + (ft ? this.TYPE_NAME[ft].toUpperCase() + ' · ' + this.PART_NAME[this.PART_OF[ft]].toUpperCase() : 'UNCLASSIFIED') + ' · p=' + row.prob.toFixed(2),
+      loading: !this.state.ready,
+      loadingText: this.state.glError ? 'WebGL unavailable: the 3D view could not start in this browser.' : 'Loading 3D model…',
+      rpmTxt: this.fmt('rpm', row.rpm),
+      filters: ['ALL', 'HIGH', 'MED'].map((f) => ({ label: f, pressed: filter === f, pick: pick('filter', f), bg: filter === f ? '#30363D' : 'transparent', fg: filter === f ? '#E6EDF3' : '#8B949E' })),
+      feed, noAlerts: feed.length === 0, modes,
+      playing: this.state.playing, paused: !this.state.playing,
+      playLabel: this.state.playing ? 'Pause replay' : 'Play replay',
+      togglePlay: () => this.setState({ playing: !this.state.playing }),
+      speeds: [1, 2, 4].map((s) => ({ label: s + '×', pressed: this.state.speed === s, pick: pick('speed', s), bg: this.state.speed === s ? '#06B6D4' : '#0D1117', fg: this.state.speed === s ? '#0D1117' : '#C9D1D9' })),
+      nextFault: () => {
+        const nx = all.find((a) => a.start > t + 1) || all[0];
+        if (nx) this.setState({ t: Math.max(0, nx.start - 18), playing: true });
+      },
+      tPad: String(t).padStart(4, '0'),
+      zoneHigh, zoneMed, medY: Y(med), hiY: Y(hi),
+      probLine: this._probLine, probArea: this._probArea,
+      cursorX: X(t), futureW: Math.max(0, 1000 - X(t)),
+      maxT: N - 1, t, axis,
+      onScrub: (e) => this.setState({ t: +e.target.value }),
+    };
+  }
+
+  render() {
+    const v = this.renderVals();
+    const mono = "font-family: 'JetBrains Mono', monospace";
+    return html`
+<div style="box-sizing: border-box; padding: 16px 20px 24px; background: #0D1117; color: #C9D1D9; font-family: 'IBM Plex Sans', system-ui, sans-serif">
+<div style="max-width: 1600px; margin: 0 auto">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding-bottom: 12px; border-bottom: 1px solid #21262D">
+<div style="display: flex; align-items: center; gap: 14px">
+<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#06B6D4" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path><circle cx="12" cy="12" r="6.6"></circle></svg>
+<div>
+<div class="ms-mono" style="font-size: 18px; font-weight: 700; letter-spacing: 0.16em; color: #E6EDF3">MACHINASENSE</div>
+<div style="font-size: 12px; color: #8B949E">Industrial fault detection · CNC spindle thermal twin</div>
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<span class="ms-mono" style="font-size: 11px; padding: 5px 8px; border: 1px dashed #30363D; color: #8B949E">${v.source}</span>
+<span class="ms-mono" style="font-size: 13px; color: #C9D1D9">${v.clock}</span>
+<span class="ms-mono" style=${`display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid ${v.statusColor}; color: ${v.statusColor}; font-size: 12px; font-weight: 700; letter-spacing: 0.12em`}><span class=${v.statusBlink} style=${`width: 8px; height: 8px; border-radius: 50%; background: ${v.statusColor}`}></span>${v.statusLabel}</span>
+</div>
+</header>
+<div class="ms-mono" style="font-size: 12px; color: #8B949E; padding: 8px 0 14px; display: flex; flex-wrap: wrap; gap: 6px 22px">
+<span><b style="color: #E6EDF3">${v.alertCount}</b> alerts (<b style="color: #EF4444">${v.highCount}</b> HIGH) across <b style="color: #E6EDF3">${v.tShown}</b> / ${v.N} timesteps</span>
+<span>Model: ${v.model}</span>
+<span>F1: ${v.f1}</span>
+<span>Dataset: AI4I 2020</span>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch">
+
+<section aria-label="Sensor readings" style="flex: 1 1 270px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<div style="background: #161B22; border: 1px solid #21262D; padding: 14px 14px 10px">
+<h2 class="ms-mono" style="margin: 0 0 4px; font-size: 11px; letter-spacing: 0.14em; color: #8B949E; font-weight: 500">FAULT PROBABILITY</h2>
+<svg viewBox="0 0 200 118" style="width: 100%; max-width: 250px; display: block; margin: 0 auto" role="img" aria-label=${'Fault probability gauge, ' + v.probPct}>
+<path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#21262D" stroke-width="14"></path>
+<path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke=${v.gaugeColor} stroke-width="14" stroke-dasharray=${v.gaugeDash}></path>
+<line x1=${v.medTick.x1} y1=${v.medTick.y1} x2=${v.medTick.x2} y2=${v.medTick.y2} stroke="#F59E0B" stroke-width="2"></line>
+<line x1=${v.hiTick.x1} y1=${v.hiTick.y1} x2=${v.hiTick.x2} y2=${v.hiTick.y2} stroke="#EF4444" stroke-width="2"></line>
+<text x="100" y="88" text-anchor="middle" fill="#E6EDF3" style=${mono + '; font-size: 28px; font-weight: 700'}>${v.probPct}</text>
+<text x="100" y="106" text-anchor="middle" fill=${v.statusColor} style=${mono + '; font-size: 11px; letter-spacing: 2px'}>${v.sevLabel}</text>
+<text x="20" y="116" text-anchor="middle" fill="#8B949E" style=${mono + '; font-size: 9px'}>0</text>
+<text x="180" y="116" text-anchor="middle" fill="#8B949E" style=${mono + '; font-size: 9px'}>1</text>
+</svg>
+<div class="ms-mono" style="display: flex; justify-content: space-between; font-size: 11px; color: #8B949E; margin-top: 6px"><span><span style="color: #F59E0B">■</span> MED ≥ ${v.medTxt}</span><span><span style="color: #EF4444">■</span> HIGH ≥ ${v.hiTxt}</span></div>
+</div>
+<div style="background: #161B22; border: 1px solid #21262D; padding: 12px 14px 4px; flex: 1 1 auto">
+<h2 class="ms-mono" style="margin: 0 0 6px; font-size: 11px; letter-spacing: 0.14em; color: #8B949E; font-weight: 500">SENSORS · Z VS NORMAL OPS</h2>
+${v.sensors.map((s) => html`
+<div style="display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid #21262D">
+<div style="flex: 1 1 auto; min-width: 0">
+<div class="ms-mono" style="font-size: 10px; letter-spacing: 0.12em; color: #8B949E">${s.label}</div>
+<div style="display: flex; align-items: baseline; gap: 6px">
+<span class="ms-mono" style="font-size: 16px; color: #E6EDF3; font-weight: 500">${s.val}</span>
+<span class="ms-mono" style="font-size: 11px; color: #8B949E">${s.unit}</span>
+<span class="ms-mono" style=${`font-size: 11px; margin-left: auto; color: ${s.zColor}`}>${s.zTxt}</span>
+</div>
+</div>
+<svg viewBox="0 0 92 28" style="width: 92px; height: 28px; flex: none" aria-hidden="true"><path d=${s.spark} fill="none" stroke=${s.stroke} stroke-width="1.5"></path></svg>
+</div>`)}
+</div>
+</section>
+
+<section aria-label="3D thermal model" style="flex: 999 1 560px; min-width: 0">
+<div style=${`position: relative; height: 660px; background: #0A0E13; border: 1px solid ${v.vpBorder}; overflow: hidden`}>
+<div style="position: absolute; inset: 0; background-image: linear-gradient(#141A22 1px, transparent 1px), linear-gradient(90deg, #141A22 1px, transparent 1px); background-size: 40px 40px"></div>
+<canvas ref=${v.setCanvas} role="img" aria-label="3D model of the CNC spindle coloured by heat. Drag to orbit, scroll to zoom." style="position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab"></canvas>
+<svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none" aria-hidden="true">
+<path d=${v.leadCool} fill="none" stroke="#6E7681" stroke-width="1"></path>
+<path d=${v.leadHot} fill="none" stroke=${v.leadHotColor} stroke-width="1.5"></path>
+</svg>
+${v.tags.map((g) => html`
+<div style=${`position: absolute; left: ${g.dx}px; top: ${g.dy}px; width: 9px; height: 9px; border-radius: 50%; background: ${g.heatHex}; border: 2px solid #0D1117; box-shadow: 0 0 0 1px ${g.border}; pointer-events: none`}></div>
+<div style=${`position: absolute; left: ${g.lx}px; top: ${g.ly}px; width: 184px; box-sizing: border-box; padding: 7px 9px; background: rgba(13,17,23,0.88); border: 1px solid ${g.border}; pointer-events: none`}>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 6px">
+<span class="ms-mono" style="font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #E6EDF3">${g.name}</span>
+<span class="ms-mono" style=${`font-size: 10px; color: ${g.codeColor}`}>${g.code}</span>
+</div>
+<div class="ms-mono" style="font-size: 11px; color: #C9D1D9; margin-top: 2px">${g.sig}</div>
+<div style="display: flex; align-items: center; gap: 6px; margin-top: 5px">
+<div style="flex: 1; height: 4px; background: #21262D"><div style=${`height: 4px; width: ${g.heatPct}%; background: ${g.heatHex}`}></div></div>
+<span class="ms-mono" style="font-size: 10px; color: #8B949E">HEAT ${g.heatPct}%</span>
+</div>
+${g.hot && html`
+<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #30363D">
+<div class="ms-mono" style=${`font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: ${g.border}`}>${g.sevLine}</div>
+<div class="ms-mono" style="font-size: 10px; color: #E6EDF3; margin-top: 3px">${g.ev1}</div>
+<div class="ms-mono" style="font-size: 10px; color: #C9D1D9; margin-top: 2px">${g.ev2}</div>
+</div>`}
+</div>`)}
+<div class=${v.alarmClass} style=${`position: absolute; inset: 0; pointer-events: none; box-shadow: ${v.vpGlow}`}></div>
+<div style="position: absolute; left: 12px; top: 12px; display: flex; flex-direction: column; gap: 5px; pointer-events: none">
+<span class="ms-mono" style="font-size: 10px; letter-spacing: 0.14em; color: #8B949E">THERMAL SIGNATURE</span>
+<div style="width: 150px; height: 8px; background: linear-gradient(90deg, #2B458C 0%, #0891B3 30%, #FACC14 55%, #FA7317 78%, #DC2626 92%, #FFEBD1 100%)"></div>
+<div class="ms-mono" style="display: flex; justify-content: space-between; width: 150px; font-size: 9px; color: #8B949E"><span>COOL</span><span>HOT</span></div>
+</div>
+${v.hasBanner && html`
+<div class="ms-mono" role="status" style=${`position: absolute; top: 12px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 200px); padding: 8px 14px; background: ${v.bannerBg}; color: #0D1117; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis`}>${v.bannerText}</div>`}
+${v.loading && html`
+<div class="ms-mono" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #8B949E; pointer-events: none">${v.loadingText}</div>`}
+<div class="ms-mono" style="position: absolute; left: 12px; bottom: 10px; font-size: 10px; color: #6E7681; pointer-events: none">DRAG TO ORBIT · SCROLL TO ZOOM</div>
+<div class="ms-mono" style="position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(13,17,23,0.85); border: 1px solid #21262D; pointer-events: none">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06B6D4" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 3v6h-6"></path></svg>
+<span style="font-size: 13px; color: #E6EDF3; font-weight: 500">${v.rpmTxt}</span><span style="font-size: 10px; color: #8B949E">RPM</span>
+</div>
+</div>
+</section>
+
+<section aria-label="Alerts and failure modes" style="flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<div style="background: #161B22; border: 1px solid #21262D; padding: 12px 14px; display: flex; flex-direction: column; min-height: 0">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px">
+<h2 class="ms-mono" style="margin: 0; font-size: 11px; letter-spacing: 0.14em; color: #8B949E; font-weight: 500">ALERT FEED</h2>
+<div role="group" aria-label="Severity filter" style="display: flex; border: 1px solid #30363D">
+${v.filters.map((f) => html`
+<button type="button" class="ms-btn ms-mono" aria-pressed=${String(f.pressed)} onClick=${f.pick} style=${`min-height: 30px; padding: 0 10px; border: 0; background: ${f.bg}; color: ${f.fg}; font-size: 11px; font-weight: 600; cursor: pointer`}>${f.label}</button>`)}
+</div>
+</div>
+<div class="ms-scroll" style="max-height: 372px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px">
+${v.noAlerts && html`
+<div class="ms-mono" style="font-size: 12px; color: #8B949E; padding: 18px 4px">No alerts yet in this replay window.</div>`}
+${v.feed.map((a) => html`
+<button type="button" class="ms-btn" onClick=${a.pick} style=${`display: block; width: 100%; text-align: left; padding: 9px 10px; background: ${a.bg}; border: 1px solid ${a.border}; color: #C9D1D9; cursor: pointer; font-family: inherit`}>
+<span style="display: flex; align-items: center; gap: 8px">
+<span style=${`width: 8px; height: 8px; border-radius: 50%; background: ${a.color}; flex: none`}></span>
+<span class="ms-mono" style=${`font-size: 11px; font-weight: 700; color: ${a.color}`}>${a.sev}</span>
+<span class="ms-mono" style="font-size: 11px; color: #8B949E">${a.time}</span>
+<span class="ms-mono" style="font-size: 11px; color: #E6EDF3; margin-left: auto">${a.conf}</span>
+</span>
+<span style="display: block; font-size: 13px; color: #E6EDF3; margin-top: 4px">${a.typeName}<span class="ms-mono" style=${`font-size: 10px; color: ${a.color}`}>${a.live}</span><span class="ms-mono" style="font-size: 10px; color: #8B949E">${a.truth}</span></span>
+<span class="ms-mono" style="display: block; font-size: 11px; color: #8B949E; margin-top: 2px">${a.ev}</span>
+</button>`)}
+</div>
+</div>
+<div style="background: #161B22; border: 1px solid #21262D; padding: 12px 14px">
+<h2 class="ms-mono" style="margin: 0 0 8px; font-size: 11px; letter-spacing: 0.14em; color: #8B949E; font-weight: 500">FAILURE MODE → PART</h2>
+${v.modes.map((m) => html`
+<div style=${`display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 1px solid ${m.border}; background: ${m.bg}; margin-bottom: 6px`}>
+<span class="ms-mono" style=${`font-size: 11px; font-weight: 700; color: ${m.color}; width: 34px`}>${m.code}</span>
+<span style="font-size: 12px; color: #E6EDF3; flex: 1">${m.name}<span style="color: #8B949E"> → ${m.part}</span></span>
+<span class="ms-mono" style="font-size: 10px; color: #8B949E">${m.count}×</span>
+<span class="ms-mono" style=${`font-size: 10px; font-weight: 700; color: ${m.color}; width: 34px; text-align: right`}>${m.state}</span>
+</div>`)}
+<div style="font-size: 11px; color: #8B949E; margin-top: 4px">RNF (random failure) has no part signature and is not localised on the model.</div>
+</div>
+</section>
+</div>
+
+<section aria-label="Timeline replay" style="margin-top: 12px; background: #161B22; border: 1px solid #21262D; padding: 12px 14px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 10px">
+<button type="button" class="ms-btn" onClick=${v.togglePlay} aria-label=${v.playLabel} style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: #0D1117; border: 1px solid #30363D; color: #E6EDF3; cursor: pointer">
+${v.playing && html`<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"></rect><rect x="14" y="5" width="4" height="14"></rect></svg>`}
+${v.paused && html`<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>`}
+</button>
+<div role="group" aria-label="Playback speed" style="display: flex; border: 1px solid #30363D">
+${v.speeds.map((b) => html`
+<button type="button" class="ms-btn ms-mono" aria-pressed=${String(b.pressed)} onClick=${b.pick} style=${`min-width: 44px; height: 44px; border: 0; background: ${b.bg}; color: ${b.fg}; font-size: 12px; font-weight: 600; cursor: pointer`}>${b.label}</button>`)}
+</div>
+<button type="button" class="ms-btn ms-mono" onClick=${v.nextFault} style="height: 44px; padding: 0 14px; background: #0D1117; border: 1px solid #30363D; color: #E6EDF3; font-size: 12px; cursor: pointer">NEXT FAULT ›</button>
+<span class="ms-mono" style="font-size: 13px; color: #E6EDF3">${v.clock}</span>
+<span class="ms-mono" style="font-size: 12px; color: #8B949E">t = ${v.tPad}</span>
+<span class="ms-mono" style="margin-left: auto; display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: #8B949E">
+<span><span style="color: #EF4444">■</span> HIGH zone</span>
+<span><span style="color: #F59E0B">■</span> MED zone</span>
+<span><span style="color: #06B6D4">━</span> fault_probability</span>
+</span>
+</div>
+<svg viewBox="0 0 1000 120" preserveAspectRatio="none" style="width: 100%; height: 120px; display: block; background: #0D1117" role="img" aria-label="Fault probability over the replay, with predicted fault zones shaded">
+<path d=${v.zoneMed} fill="#F59E0B" fill-opacity="0.22"></path>
+<path d=${v.zoneHigh} fill="#EF4444" fill-opacity="0.26"></path>
+<line x1="0" x2="1000" y1=${v.medY} y2=${v.medY} stroke="#F59E0B" stroke-opacity="0.6" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"></line>
+<line x1="0" x2="1000" y1=${v.hiY} y2=${v.hiY} stroke="#EF4444" stroke-opacity="0.6" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"></line>
+<path d=${v.probArea} fill="#06B6D4" fill-opacity="0.12"></path>
+<path d=${v.probLine} fill="none" stroke="#06B6D4" stroke-width="1.5" vector-effect="non-scaling-stroke"></path>
+<rect x=${v.cursorX} y="0" width=${v.futureW} height="120" fill="#0D1117" fill-opacity="0.6"></rect>
+<line x1=${v.cursorX} x2=${v.cursorX} y1="0" y2="120" stroke="#E6EDF3" stroke-width="1.5" vector-effect="non-scaling-stroke"></line>
+</svg>
+<input class="ms-range" type="range" min="0" max=${v.maxT} step="1" value=${v.t} onInput=${v.onScrub} aria-label="Replay position" />
+<div class="ms-mono" style="display: flex; justify-content: space-between; font-size: 10px; color: #6E7681">
+${v.axis.map((a) => html`<span>${a}</span>`)}
+</div>
+</section>
+
+</div>
+</div>`;
+  }
+}
+
+render(html`<${App} ...${window.MS.props} />`, document.getElementById('root'));
+</script>
+</body>
+</html>
